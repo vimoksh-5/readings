@@ -19,4 +19,14 @@ class MainActivity : ReactActivity() {
    */
   override fun createReactActivityDelegate(): ReactActivityDelegate =
       DefaultReactActivityDelegate(this, mainComponentName, fabricEnabled)
+
+  override fun onResume() {
+    super.onResume()
+    GlucoseService.stopAlertAudio()
+  }
+
+  override fun onNewIntent(intent: android.content.Intent?) {
+    super.onNewIntent(intent)
+    GlucoseService.stopAlertAudio()
+  }
 }

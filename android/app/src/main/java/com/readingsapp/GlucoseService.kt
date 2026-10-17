@@ -11,6 +11,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
+import android.media.MediaPlayer
 import android.media.Ringtone
 import android.media.RingtoneManager
 import android.os.Build
@@ -35,13 +36,13 @@ class GlucoseService : Service() {
 
   companion object {
     /** Silent channel for the ongoing foreground notification. */
-    const val CHANNEL_STATUS = "glucose_status_v3"
-    /** Urgent low alerts channel (< 70 mg/dL). */
-    const val CHANNEL_ALERT_LOW = "glucose_alerts_low_v4"
-    /** High alerts channel (> 180 mg/dL). */
-    const val CHANNEL_ALERT_HIGH = "glucose_alerts_high_v4"
+    const val CHANNEL_STATUS = "readings_status_v7"
+    /** Urgent audible alerts channel. */
+    const val CHANNEL_ALERTS_CHIME = "readings_alerts_chime_v7"
+    /** Silent alerts channel (heads-up visible, zero sound). */
+    const val CHANNEL_ALERTS_SILENT = "readings_alerts_silent_v7"
     /** Periodic reading broadcast chime. */
-    const val CHANNEL_BROADCAST = "glucose_broadcast_v4"
+    const val CHANNEL_BROADCAST = "readings_broadcast_v7"
 
     const val NOTIF_ID = 1001
     const val ALERT_LOW_NOTIF_ID = 1002
@@ -55,21 +56,177 @@ class GlucoseService : Service() {
     /** Minimum interval between audible alert notifications (ms). */
     const val ALERT_THROTTLE_MS = 10L * 60 * 1000  // 10 minutes
 
+    @Volatile private var activePlayer: MediaPlayer? = null
     @Volatile private var activeRingtone: Ringtone? = null
     private val audioStopHandler = Handler(Looper.getMainLooper())
     private var audioStopRunnable: Runnable? = null
 
-    fun stopAlertAudio() {
+    private fun stopAlertAudioInternal() {
       try {
         audioStopRunnable?.let { audioStopHandler.removeCallbacks(it) }
         audioStopRunnable = null
-        activeRingtone?.let {
-          if (it.isPlaying) {
-            it.stop()
-          }
+        activePlayer?.let { player ->
+          try {
+            if (player.isPlaying) {
+              player.stop()
+            }
+          } catch (_: Exception) {}
+          try {
+            player.reset()
+            player.release()
+          } catch (_: Exception) {}
+        }
+        activePlayer = null
+
+        activeRingtone?.let { ringtone ->
+          try {
+            if (ringtone.isPlaying) {
+              ringtone.stop()
+            }
+          } catch (_: Exception) {}
         }
         activeRingtone = null
       } catch (_: Exception) {}
+    }
+
+    fun stopAlertAudio() {
+      if (Looper.myLooper() == Looper.getMainLooper()) {
+        stopAlertAudioInternal()
+      } else {
+        audioStopHandler.post { stopAlertAudioInternal() }
+      }
+    }
+
+    fun playAlertAudio(context: Context, tone: String, durationSec: Int) {
+      audioStopHandler.post {
+        try {
+          stopAlertAudioInternal()
+
+          val t = tone.lowercase()
+          if (t == "silent") return@post
+
+          val dSec = durationSec.coerceIn(1, 60)
+
+          if (t == "notification" || t == "chime") {
+            var played = false
+            // 1. Try actual system notification sound
+            try {
+              val actualUri = RingtoneManager.getActualDefaultRingtoneUri(context, RingtoneManager.TYPE_NOTIFICATION)
+              if (actualUri != null) {
+                val player = MediaPlayer()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                  player.setAudioAttributes(
+                    AudioAttributes.Builder()
+                      .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                      .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
+                      .build()
+                  )
+                }
+                player.setDataSource(context.applicationContext, actualUri)
+                player.prepare()
+                player.setOnCompletionListener { mp ->
+                  try { mp.release() } catch (_: Exception) {}
+                  if (activePlayer == mp) activePlayer = null
+                }
+                player.start()
+                activePlayer = player
+                played = true
+                android.util.Log.i("GlucoseService", "Playing system notification sound ($actualUri)")
+              }
+            } catch (e: Exception) {
+              android.util.Log.w("GlucoseService", "System ringtone failed: ${e.message}, falling back to alert_chime")
+            }
+
+            // 2. Guaranteed fallback to bundled alert_chime raw asset
+            if (!played) {
+              try {
+                val player = MediaPlayer()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                  player.setAudioAttributes(
+                    AudioAttributes.Builder()
+                      .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                      .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
+                      .build()
+                  )
+                }
+                context.resources.openRawResourceFd(R.raw.alert_chime)?.use { afd ->
+                  player.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                }
+                player.prepare()
+                player.setOnCompletionListener { mp ->
+                  try { mp.release() } catch (_: Exception) {}
+                  if (activePlayer == mp) activePlayer = null
+                }
+                player.start()
+                activePlayer = player
+                android.util.Log.i("GlucoseService", "Playing fallback alert_chime")
+              } catch (e2: Exception) {
+                android.util.Log.e("GlucoseService", "Fallback chime failed: ${e2.message}")
+              }
+            }
+
+            val runnable = Runnable { stopAlertAudioInternal() }
+            audioStopRunnable = runnable
+            audioStopHandler.postDelayed(runnable, dSec * 1000L)
+          } else {
+            // Alarm Ring: alert_ring.mp3 (user custom tone) for custom duration
+            var played = false
+            try {
+              val player = MediaPlayer()
+              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                player.setAudioAttributes(
+                  AudioAttributes.Builder()
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .setUsage(AudioAttributes.USAGE_ALARM)
+                    .build()
+                )
+              }
+              context.resources.openRawResourceFd(R.raw.alert_ring)?.use { afd ->
+                player.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+              }
+              player.prepare()
+              player.isLooping = dSec > 9 // alert_ring.mp3 is ~9.67s
+              player.setOnCompletionListener { mp ->
+                try { mp.release() } catch (_: Exception) {}
+                if (activePlayer == mp) activePlayer = null
+              }
+              player.start()
+              activePlayer = player
+              played = true
+              android.util.Log.i("GlucoseService", "Playing alert_ring.mp3 for ${dSec}s")
+            } catch (e: Exception) {
+              android.util.Log.e("GlucoseService", "alert_ring playback failed: ${e.message}")
+            }
+
+            if (!played) {
+              // Fallback to chime if alert_ring fails
+              try {
+                val player = MediaPlayer()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                  player.setAudioAttributes(
+                    AudioAttributes.Builder()
+                      .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                      .setUsage(AudioAttributes.USAGE_ALARM)
+                      .build()
+                  )
+                }
+                context.resources.openRawResourceFd(R.raw.alert_chime)?.use { afd ->
+                  player.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                }
+                player.prepare()
+                player.start()
+                activePlayer = player
+              } catch (_: Exception) {}
+            }
+
+            val runnable = Runnable { stopAlertAudioInternal() }
+            audioStopRunnable = runnable
+            audioStopHandler.postDelayed(runnable, dSec * 1000L)
+          }
+        } catch (e: Exception) {
+          android.util.Log.e("GlucoseService", "playAlertAudio error: ${e.message}")
+        }
+      }
     }
 
     fun acknowledgeAlert(context: Context) {
@@ -135,7 +292,6 @@ class GlucoseService : Service() {
         .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
         .setCategory(NotificationCompat.CATEGORY_EVENT)
         .setPriority(NotificationCompat.PRIORITY_HIGH)
-        .setDefaults(NotificationCompat.DEFAULT_ALL)
         .build()
 
       try {
@@ -143,11 +299,7 @@ class GlucoseService : Service() {
         mgr?.notify(BROADCAST_NOTIF_ID, notif)
       } catch (_: Exception) {}
 
-      try {
-        val alertUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-        val r = RingtoneManager.getRingtone(context, alertUri)
-        r?.play()
-      } catch (_: Exception) {}
+      playAlertAudio(context, tone = "notification", durationSec = 1)
     }
 
     fun fireAlertNotification(
@@ -159,22 +311,25 @@ class GlucoseService : Service() {
       isTest: Boolean = false
     ) {
       val prefs = getSecurePrefs(context)
-      val channelId = if (isLow) CHANNEL_ALERT_LOW else CHANNEL_ALERT_HIGH
       val notifId = if (isLow) ALERT_LOW_NOTIF_ID else ALERT_HIGH_NOTIF_ID
 
       val tone = if (isLow) prefs.getString("lowAlertTone", "alarm") ?: "alarm"
-                 else prefs.getString("highAlertTone", "notification") ?: "notification"
+                 else prefs.getString("highAlertTone", "alarm") ?: "alarm"
+      val isSilent = tone.lowercase() == "silent"
+      val durationSec = prefs.getInt("alertDurationSeconds", 5).coerceIn(1, 60)
+      val channelId = if (isSilent) CHANNEL_ALERTS_SILENT else CHANNEL_ALERTS_CHIME
+
       val vibStyle = if (isLow) prefs.getString("lowVibration", "urgent") ?: "urgent"
                      else prefs.getString("highVibration", "pulse") ?: "pulse"
       val vibrateEnabled = prefs.getBoolean("vibrateEnabled", true)
 
-      val pattern: LongArray? = if (!vibrateEnabled || vibStyle == "off") {
-        null
+      val pattern: LongArray = if (!vibrateEnabled || vibStyle == "off") {
+        longArrayOf(0)
       } else when (vibStyle) {
-        "urgent" -> longArrayOf(0, 600, 250, 600, 250, 600)
-        "pulse" -> longArrayOf(0, 400, 200, 400)
-        "gentle" -> longArrayOf(0, 250, 150, 250)
-        else -> longArrayOf(0, 400, 200, 400)
+        "urgent" -> longArrayOf(0, 400, 200, 400)
+        "pulse" -> longArrayOf(0, 250, 150, 250)
+        "gentle" -> longArrayOf(0, 200)
+        else -> longArrayOf(0, 250, 150, 250)
       }
 
       val openIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
@@ -193,8 +348,13 @@ class GlucoseService : Service() {
       )
       val prefix = if (isTest) "[TEST] " else ""
       val title = if (isLow) "${prefix}⚠ LOW GLUCOSE: $display $arrow" else "${prefix}⚠ HIGH GLUCOSE: $display $arrow"
+      val toneLabel = when (tone.lowercase()) {
+        "silent" -> "SILENT"
+        "notification", "chime" -> "NOTIFICATION"
+        else -> "ALARM RING"
+      }
       val body = if (isTest) {
-        "Sound: ${tone.uppercase()} · Vibration: ${vibStyle.uppercase()} · Simulated: $display."
+        "Sound: $toneLabel (${durationSec}s) · Vibration: ${vibStyle.uppercase()} · Simulated: $display."
       } else {
         "Blood sugar is $state ($display $arrow). Immediate action may be required."
       }
@@ -207,75 +367,27 @@ class GlucoseService : Service() {
         .setColor(alertColor)
         .setLargeIcon(BitmapFactory.decodeResource(context.resources, R.mipmap.ic_launcher))
         .setContentIntent(openIntent)
-        .setDeleteIntent(ackIntent)      // Swiping away acknowledges and stops sound!
+        .setDeleteIntent(ackIntent)      // Swiping away acknowledges and silences!
         .addAction(0, "✓ Acknowledge", ackIntent) // Explicit button to acknowledge!
         .setAutoCancel(true)
         .setOngoing(false)               // Can always be dismissed!
         .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-        .setCategory(if (isLow) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_EVENT)
-        .setPriority(NotificationCompat.PRIORITY_HIGH)
-
-      if (pattern != null) {
-        b.setVibrate(pattern)
-      } else {
-        b.setVibrate(longArrayOf(0))
-      }
+        .setCategory(NotificationCompat.CATEGORY_ALARM)
+        .setPriority(NotificationCompat.PRIORITY_MAX)
+        .setVibrate(pattern)
 
       try {
         val mgr = context.getSystemService(NotificationManager::class.java)
         mgr?.notify(notifId, b.build())
-      } catch (_: Exception) {}
-
-      // Trigger custom hardware vibration
-      if (pattern != null) {
-        try {
-          val v = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? android.os.VibratorManager)?.defaultVibrator
-          } else {
-            @Suppress("DEPRECATION")
-            context.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
-          }
-          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            v?.vibrate(android.os.VibrationEffect.createWaveform(pattern, -1))
-          } else {
-            @Suppress("DEPRECATION")
-            v?.vibrate(pattern, -1)
-          }
-        } catch (_: Exception) {}
+        android.util.Log.i("GlucoseService", "Alert notification posted ($title, notifId=$notifId, channel=$channelId)")
+      } catch (e: Exception) {
+        android.util.Log.e("GlucoseService", "Failed to post alert notification: ${e.message}")
       }
 
-      // Trigger custom audio playback with guaranteed auto-stop
-      if (tone != "silent") {
-        try {
-          stopAlertAudio()
-          val soundUri = if (tone == "alarm") {
-            RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-              ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-          } else {
-            RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-          }
-          val r = RingtoneManager.getRingtone(context, soundUri)
-          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            r?.audioAttributes = AudioAttributes.Builder()
-              .setUsage(if (tone == "alarm") AudioAttributes.USAGE_ALARM else AudioAttributes.USAGE_NOTIFICATION_COMMUNICATION_INSTANT)
-              .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-              .build()
-          }
-          r?.play()
-          activeRingtone = r
-
-          // Auto-stop after 3.5 seconds MAX so alarm never loops endlessly!
-          val stopRunnable = Runnable {
-            try {
-              if (activeRingtone === r) {
-                r?.stop()
-                activeRingtone = null
-              }
-            } catch (_: Exception) {}
-          }
-          audioStopRunnable = stopRunnable
-          audioStopHandler.postDelayed(stopRunnable, 3500L)
-        } catch (_: Exception) {}
+      if (!isSilent) {
+        playAlertAudio(context, tone, durationSec)
+      } else {
+        stopAlertAudio()
       }
     }
 
@@ -347,14 +459,20 @@ class GlucoseService : Service() {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       val mgr = getSystemService(NotificationManager::class.java)
 
-      // Delete previous legacy channels
-      listOf("glucose_live", "glucose_status", "glucose_status_v2", "glucose_alerts", "glucose_alerts_v2").forEach { id ->
+      // Delete all previous channels to purge any cached invalid URIs or settings
+      listOf(
+        "glucose_live", "glucose_status", "glucose_status_v2", "glucose_status_v3", "glucose_status_v4",
+        "glucose_alerts", "glucose_alerts_v2", "glucose_alerts_low_v4", "glucose_alerts_high_v4",
+        "glucose_broadcast_v4",
+        "readings_status_v5", "readings_alerts_chime_v5", "readings_alerts_silent_v5", "readings_broadcast_v5",
+        "readings_status_v6", "readings_alerts_chime_v6", "readings_alerts_silent_v6", "readings_broadcast_v6"
+      ).forEach { id ->
         try { mgr?.deleteNotificationChannel(id) } catch (_: Exception) {}
       }
 
-      // Status channel: 100% silent ongoing notification
+      // 1. Status channel: 100% silent ongoing notification
       val statusCh = NotificationChannel(
-        CHANNEL_STATUS, "Readings — status (silent)",
+        CHANNEL_STATUS, "Readings — Status (Silent)",
         NotificationManager.IMPORTANCE_LOW
       ).apply {
         description = "Ongoing silent glucose reading. Always visible."
@@ -365,55 +483,43 @@ class GlucoseService : Service() {
       }
       mgr?.createNotificationChannel(statusCh)
 
-      // Low Alert Channel: urgent alarm tone + 3-pulse vibration
-      val lowSoundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-      val highSoundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-
-      val alarmAttributes = AudioAttributes.Builder()
-        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-        .setUsage(AudioAttributes.USAGE_ALARM)
-        .build()
-
-      val notifAttributes = AudioAttributes.Builder()
-        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-        .setUsage(AudioAttributes.USAGE_NOTIFICATION_COMMUNICATION_INSTANT)
-        .build()
-
-      val lowAlertCh = NotificationChannel(
-        CHANNEL_ALERT_LOW, "Readings — Urgent Low Alerts",
+      // 2. Chime Alerts channel: heads-up notification with vibration
+      // Sound playback is handled dynamically by MediaPlayer with user-configurable duration
+      val chimeCh = NotificationChannel(
+        CHANNEL_ALERTS_CHIME, "Readings — Glucose Alerts",
         NotificationManager.IMPORTANCE_HIGH
       ).apply {
-        description = "Loud alarm tone & urgent vibration when blood glucose drops below low threshold."
-        lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-        enableVibration(true)
-        vibrationPattern = longArrayOf(0, 600, 250, 600, 250, 600)
-        setSound(lowSoundUri, alarmAttributes)
-        setBypassDnd(true)
-      }
-      mgr?.createNotificationChannel(lowAlertCh)
-
-      val highAlertCh = NotificationChannel(
-        CHANNEL_ALERT_HIGH, "Readings — High Alerts",
-        NotificationManager.IMPORTANCE_HIGH
-      ).apply {
-        description = "Notification chime & double-pulse vibration when blood glucose exceeds high threshold."
-        lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-        enableVibration(true)
-        vibrationPattern = longArrayOf(0, 400, 200, 400)
-        setSound(highSoundUri, notifAttributes)
-      }
-      mgr?.createNotificationChannel(highAlertCh)
-
-      val broadcastCh = NotificationChannel(
-        CHANNEL_BROADCAST, "Readings — Periodic Broadcasts",
-        NotificationManager.IMPORTANCE_HIGH
-      ).apply {
-        description = "Periodic audible reading announcements at configured intervals."
+        description = "Out-of-range glucose alerts."
         lockscreenVisibility = Notification.VISIBILITY_PUBLIC
         enableVibration(true)
         vibrationPattern = longArrayOf(0, 250, 150, 250)
-        setSound(highSoundUri, notifAttributes)
+        setSound(null, null)
+      }
+      mgr?.createNotificationChannel(chimeCh)
+
+      // 3. Silent Alerts channel: heads-up alert with vibration only
+      val silentCh = NotificationChannel(
+        CHANNEL_ALERTS_SILENT, "Readings — Glucose Alerts (Silent)",
+        NotificationManager.IMPORTANCE_HIGH
+      ).apply {
+        description = "Silent heads-up alert with vibration only."
+        lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        enableVibration(true)
+        vibrationPattern = longArrayOf(0, 250, 150, 250)
+        setSound(null, null)
+      }
+      mgr?.createNotificationChannel(silentCh)
+
+      // 4. Periodic Broadcast channel
+      val broadcastCh = NotificationChannel(
+        CHANNEL_BROADCAST, "Readings — Periodic Broadcasts",
+        NotificationManager.IMPORTANCE_DEFAULT
+      ).apply {
+        description = "Periodic audible reading announcements."
+        lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        enableVibration(true)
+        vibrationPattern = longArrayOf(0, 200)
+        setSound(null, null)
       }
       mgr?.createNotificationChannel(broadcastCh)
     }
@@ -452,6 +558,7 @@ class GlucoseService : Service() {
             .putString("lowVibration", b.getString("lowVibration") ?: prefs.getString("lowVibration", "urgent"))
             .putString("highVibration", b.getString("highVibration") ?: prefs.getString("highVibration", "pulse"))
             .putBoolean("vibrateEnabled", b.getBoolean("vibrateEnabled", prefs.getBoolean("vibrateEnabled", true)))
+            .putInt("alertDurationSeconds", b.getInt("alertDurationSeconds", prefs.getInt("alertDurationSeconds", 5)).coerceIn(1, 60))
             .apply()
         }
         return START_STICKY
@@ -474,6 +581,7 @@ class GlucoseService : Service() {
         .putString("lowVibration", b.getString("lowVibration") ?: prefs.getString("lowVibration", "urgent"))
         .putString("highVibration", b.getString("highVibration") ?: prefs.getString("highVibration", "pulse"))
         .putBoolean("vibrateEnabled", b.getBoolean("vibrateEnabled", prefs.getBoolean("vibrateEnabled", true)))
+        .putInt("alertDurationSeconds", b.getInt("alertDurationSeconds", prefs.getInt("alertDurationSeconds", 5)).coerceIn(1, 60))
         .apply()
     }
 
@@ -649,6 +757,17 @@ class GlucoseService : Service() {
         return
       }
       val conn = JSONObject(text).optJSONObject("data")?.optJSONObject("connection")
+      val sensorObj = conn?.optJSONObject("sensor") ?: conn?.optJSONArray("sensors")?.optJSONObject(0)
+      if (sensorObj != null) {
+        val rawA = sensorObj.optLong("a", 0L)
+        if (rawA > 0L) {
+          val activationMs = if (rawA > 100_000_000_000L) rawA else rawA * 1000L
+          val elapsedMs = maxOf(0L, System.currentTimeMillis() - activationMs)
+          val lifespanMs = 15L * 86400 * 1000L
+          val remainingDays = (maxOf(0L, lifespanMs - elapsedMs) / 86400000L + 1).toInt().coerceIn(1, 15)
+          prefs.edit().putInt("sensorDaysRemaining", remainingDays).apply()
+        }
+      }
       val m = conn?.optJSONObject("glucoseMeasurement")
       if (m == null) {
         updateStatusNotificationWithLast("No reading", "Sensor may be warming up")

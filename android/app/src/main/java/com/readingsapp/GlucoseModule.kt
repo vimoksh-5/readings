@@ -10,6 +10,7 @@ import android.provider.Settings
 import androidx.core.content.ContextCompat
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -28,11 +29,13 @@ class GlucoseModule(private val reactContext: ReactApplicationContext) :
         return
       }
       try {
+        val map = Arguments.createMap().apply {
+          putInt("valueMgDl", valueMgDl)
+          putInt("trendArrow", trendArrow)
+          putDouble("epochMs", epochMs.toDouble())
+        }
         c.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-          .emit(
-            "GlucoseUpdate",
-            mapOf("valueMgDl" to valueMgDl, "trendArrow" to trendArrow, "epochMs" to epochMs)
-          )
+          .emit("GlucoseUpdate", map)
       } catch (_: Exception) {}
     }
   }
@@ -102,9 +105,11 @@ class GlucoseModule(private val reactContext: ReactApplicationContext) :
     lowVibration: String,
     highVibration: String,
     vibrateEnabled: Boolean,
+    alertDurationSeconds: Double,
     promise: Promise
   ) {
     try {
+      val durationSec = alertDurationSeconds.toInt().coerceIn(1, 60)
       securePrefs().edit()
         .putInt("pollSeconds", pollSeconds.toInt().coerceIn(30, 900))
         .putString("units", units)
@@ -119,6 +124,7 @@ class GlucoseModule(private val reactContext: ReactApplicationContext) :
         .putString("lowVibration", lowVibration)
         .putString("highVibration", highVibration)
         .putBoolean("vibrateEnabled", vibrateEnabled)
+        .putInt("alertDurationSeconds", durationSec)
         .apply()
       val intent = Intent(reactContext, GlucoseService::class.java).apply {
         putExtra("pollSeconds", pollSeconds.toInt().coerceIn(30, 900))
@@ -134,6 +140,7 @@ class GlucoseModule(private val reactContext: ReactApplicationContext) :
         putExtra("lowVibration", lowVibration)
         putExtra("highVibration", highVibration)
         putExtra("vibrateEnabled", vibrateEnabled)
+        putExtra("alertDurationSeconds", durationSec)
       }
       ContextCompat.startForegroundService(reactContext, intent)
       promise.resolve(true)
@@ -154,9 +161,11 @@ class GlucoseModule(private val reactContext: ReactApplicationContext) :
     lowVibration: String,
     highVibration: String,
     vibrateEnabled: Boolean,
+    alertDurationSeconds: Double,
     promise: Promise
   ) {
     try {
+      val durationSec = alertDurationSeconds.toInt().coerceIn(1, 60)
       securePrefs().edit()
         .putInt("pollSeconds", pollSeconds.toInt().coerceIn(30, 900))
         .putString("units", units)
@@ -171,6 +180,7 @@ class GlucoseModule(private val reactContext: ReactApplicationContext) :
         .putString("lowVibration", lowVibration)
         .putString("highVibration", highVibration)
         .putBoolean("vibrateEnabled", vibrateEnabled)
+        .putInt("alertDurationSeconds", durationSec)
         .apply()
 
       if (GlucoseService.running) {
@@ -189,6 +199,7 @@ class GlucoseModule(private val reactContext: ReactApplicationContext) :
           putExtra("lowVibration", lowVibration)
           putExtra("highVibration", highVibration)
           putExtra("vibrateEnabled", vibrateEnabled)
+          putExtra("alertDurationSeconds", durationSec)
         }
         reactContext.startService(intent)
       }
@@ -338,11 +349,10 @@ class GlucoseModule(private val reactContext: ReactApplicationContext) :
   fun openNotificationSettings(channelType: String?, promise: Promise) {
     try {
       val channelId = when (channelType?.lowercase()) {
-        "low" -> GlucoseService.CHANNEL_ALERT_LOW
-        "high" -> GlucoseService.CHANNEL_ALERT_HIGH
+        "silent" -> GlucoseService.CHANNEL_ALERTS_SILENT
         "broadcast" -> GlucoseService.CHANNEL_BROADCAST
         "status" -> GlucoseService.CHANNEL_STATUS
-        else -> GlucoseService.CHANNEL_ALERT_LOW
+        else -> GlucoseService.CHANNEL_ALERTS_CHIME
       }
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         val intent = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {

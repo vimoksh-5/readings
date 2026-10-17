@@ -884,10 +884,11 @@ export default function App() {
           next.audibleBroadcastEnabled ?? false,
           next.audibleBroadcastIntervalMin ?? 15,
           next.lowAlertTone ?? 'alarm',
-          next.highAlertTone ?? 'notification',
+          next.highAlertTone ?? 'alarm',
           next.lowVibration ?? 'urgent',
           next.highVibration ?? 'pulse',
           next.vibrateEnabled ?? true,
+          next.alertDurationSeconds ?? 5,
         );
       } catch { }
     }
@@ -966,6 +967,13 @@ export default function App() {
       }
       const merged = await mergeRealSensorHistory(incoming);
       setHistory(merged);
+
+      if (typeof g.sensorDaysLeft === 'number' && g.sensorDaysLeft > 0) {
+        persist({
+          ...settingsRef.current,
+          sensorDaysRemaining: g.sensorDaysLeft,
+        });
+      }
     } catch (e: any) {
       if (e?.code === 'AUTH') {
         setError('Session expired — please sign in again.');
@@ -1039,7 +1047,8 @@ export default function App() {
         accountId: login.accountId,
         patientId: conn.patientId,
         patientName: `${conn.firstName} ${conn.lastName}`.trim(),
-        sensorStartEpochMs: Date.now() - 3 * 86400000,
+        sensorStartEpochMs: Date.now(),
+        sensorDaysRemaining: 15,
       };
       setRegion(home);
       await persist(next);
@@ -1063,10 +1072,11 @@ export default function App() {
         next.audibleBroadcastEnabled ?? false,
         next.audibleBroadcastIntervalMin ?? 15,
         next.lowAlertTone ?? 'alarm',
-        next.highAlertTone ?? 'notification',
+        next.highAlertTone ?? 'alarm',
         next.lowVibration ?? 'urgent',
         next.highVibration ?? 'pulse',
         next.vibrateEnabled ?? true,
+        next.alertDurationSeconds ?? 5,
       );
       setSvcRunning(ok);
       setPassword('');
@@ -1113,10 +1123,11 @@ export default function App() {
           cfg.audibleBroadcastEnabled ?? false,
           cfg.audibleBroadcastIntervalMin ?? 15,
           cfg.lowAlertTone ?? 'alarm',
-          cfg.highAlertTone ?? 'notification',
+          cfg.highAlertTone ?? 'alarm',
           cfg.lowVibration ?? 'urgent',
           cfg.highVibration ?? 'pulse',
           cfg.vibrateEnabled ?? true,
+          cfg.alertDurationSeconds ?? 5,
         );
         setSvcRunning(ok);
         if (!ok) {
@@ -1195,9 +1206,13 @@ export default function App() {
   const isStaleOrDead = freshness === 'stale' || freshness === 'dead';
 
   const sensorDaysLeft = useMemo(() => {
+    if (typeof settings.sensorDaysRemaining === 'number' && settings.sensorDaysRemaining > 0) {
+      return Math.max(1, Math.min(15, settings.sensorDaysRemaining));
+    }
     const elapsed = Date.now() - settings.sensorStartEpochMs;
-    return Math.max(0, Math.ceil((15 * 86400000 - elapsed) / 86400000));
-  }, [settings.sensorStartEpochMs]);
+    const calc = Math.ceil((15 * 86400000 - elapsed) / 86400000);
+    return Math.max(1, Math.min(15, calc > 0 ? calc : 15));
+  }, [settings.sensorStartEpochMs, settings.sensorDaysRemaining]);
 
   const stats = useMemo(
     () =>
@@ -2310,7 +2325,7 @@ export default function App() {
             <View style={styles.card}>
               <Text style={styles.sectionTitle}>Alert Sounds & Haptics</Text>
               <Text style={styles.toggleSub}>
-                Customize sound tones and vibrations for hypoglycemia (&lt; {settings.lowThresholdMgDl}) and hyperglycemia (&gt; {settings.highThresholdMgDl}). Alarms automatically silence after 3.5s or instantly upon tapping or acknowledging.
+                Customize sound tones and vibrations for hypoglycemia (&lt; {settings.lowThresholdMgDl}) and hyperglycemia (&gt; {settings.highThresholdMgDl}). Alarms automatically silence after {settings.alertDurationSeconds ?? 5}s or instantly upon tapping or acknowledging.
               </Text>
 
               {/* Master Vibration Switch */}
@@ -2352,26 +2367,32 @@ export default function App() {
                 <Text style={[styles.toggleSub, { marginBottom: 6 }]}>Sound Tone:</Text>
                 <View style={styles.chipRow}>
                   {[
-                    { key: 'alarm', label: '🚨 Alarm Siren' },
-                    { key: 'notification', label: '🔔 Chime' },
-                    { key: 'silent', label: '🔕 Silent' },
-                  ].map(t => (
-                    <Pressable
-                      key={t.key}
-                      onPress={() => persist({ ...settings, lowAlertTone: t.key as any })}
-                      style={[
-                        styles.chip,
-                        (settings.lowAlertTone ?? 'alarm') === t.key && styles.chipOn,
-                      ]}>
-                      <Text
+                    { key: 'alarm', label: '🚨 Alarm Ring' },
+                    { key: 'notification', label: '🔔 Notification' },
+                    { key: 'silent', label: '🔕 Silent (Vibrate Only)' },
+                  ].map(t => {
+                    const activeTone = settings.lowAlertTone ?? 'alarm';
+                    const isSelected = (activeTone === t.key) ||
+                      (activeTone === 'ring' && t.key === 'alarm') ||
+                      (activeTone === 'chime' && t.key === 'notification');
+                    return (
+                      <Pressable
+                        key={t.key}
+                        onPress={() => persist({ ...settings, lowAlertTone: t.key as any })}
                         style={[
-                          styles.chipTx,
-                          (settings.lowAlertTone ?? 'alarm') === t.key && styles.chipTxOn,
+                          styles.chip,
+                          isSelected && styles.chipOn,
                         ]}>
-                        {t.label}
-                      </Text>
-                    </Pressable>
-                  ))}
+                        <Text
+                          style={[
+                            styles.chipTx,
+                            isSelected && styles.chipTxOn,
+                          ]}>
+                          {t.label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
                 </View>
 
                 {/* Vibration Pattern selection */}
@@ -2443,26 +2464,32 @@ export default function App() {
                 <Text style={[styles.toggleSub, { marginBottom: 6 }]}>Sound Tone:</Text>
                 <View style={styles.chipRow}>
                   {[
-                    { key: 'notification', label: '🔔 Chime' },
-                    { key: 'alarm', label: '🚨 Alarm Siren' },
-                    { key: 'silent', label: '🔕 Silent' },
-                  ].map(t => (
-                    <Pressable
-                      key={t.key}
-                      onPress={() => persist({ ...settings, highAlertTone: t.key as any })}
-                      style={[
-                        styles.chip,
-                        (settings.highAlertTone ?? 'notification') === t.key && styles.chipOn,
-                      ]}>
-                      <Text
+                    { key: 'alarm', label: '🚨 Alarm Ring' },
+                    { key: 'notification', label: '🔔 Notification' },
+                    { key: 'silent', label: '🔕 Silent (Vibrate Only)' },
+                  ].map(t => {
+                    const activeTone = settings.highAlertTone ?? 'alarm';
+                    const isSelected = (activeTone === t.key) ||
+                      (activeTone === 'ring' && t.key === 'alarm') ||
+                      (activeTone === 'chime' && t.key === 'notification');
+                    return (
+                      <Pressable
+                        key={t.key}
+                        onPress={() => persist({ ...settings, highAlertTone: t.key as any })}
                         style={[
-                          styles.chipTx,
-                          (settings.highAlertTone ?? 'notification') === t.key && styles.chipTxOn,
+                          styles.chip,
+                          isSelected && styles.chipOn,
                         ]}>
-                        {t.label}
-                      </Text>
-                    </Pressable>
-                  ))}
+                        <Text
+                          style={[
+                            styles.chipTx,
+                            isSelected && styles.chipTxOn,
+                          ]}>
+                          {t.label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
                 </View>
 
                 {/* Vibration Pattern selection */}
@@ -2517,6 +2544,93 @@ export default function App() {
                     <Text style={[styles.baselineBtnTx, { color: C.textSec, fontSize: 11 }]}>
                       ⚙ Android High Settings
                     </Text>
+                  </Pressable>
+                </View>
+              </View>
+
+              {/* Alert Sound Duration */}
+              <View style={{ marginTop: 18, paddingTop: 14, borderTopWidth: 1, borderTopColor: C.borderLight }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={[styles.settLabel, { marginBottom: 0 }]}>Alert Sound Duration</Text>
+                  <View style={{
+                    backgroundColor: 'rgba(0, 229, 255, 0.12)',
+                    paddingHorizontal: 8,
+                    paddingVertical: 3,
+                    borderRadius: 6,
+                    borderWidth: 1,
+                    borderColor: 'rgba(0, 229, 255, 0.3)',
+                  }}>
+                    <Text style={{ color: C.accent, fontSize: 13, fontWeight: '700' }}>
+                      {settings.alertDurationSeconds ?? 5}s
+                    </Text>
+                  </View>
+                </View>
+                <Text style={[styles.toggleSub, { marginBottom: 10 }]}>
+                  Alarm Ring plays for this duration (default 5s), then automatically silences. Also silences immediately upon acknowledging, swiping away, or opening the app.
+                </Text>
+
+                {/* Quick Chips */}
+                <View style={styles.chipRow}>
+                  {[
+                    { sec: 1, label: '1s' },
+                    { sec: 2, label: '2s' },
+                    { sec: 3, label: '3s' },
+                    { sec: 5, label: '5s (Default)' },
+                    { sec: 10, label: '10s' },
+                    { sec: 15, label: '15s' },
+                  ].map(item => {
+                    const isSelected = (settings.alertDurationSeconds ?? 5) === item.sec;
+                    return (
+                      <Pressable
+                        key={item.sec}
+                        onPress={() => persist({ ...settings, alertDurationSeconds: item.sec })}
+                        style={[styles.chip, isSelected && styles.chipOn]}>
+                        <Text style={[styles.chipTx, isSelected && styles.chipTxOn]}>
+                          {item.label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+
+                {/* Steppers & Silence Now */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 }}>
+                  <Pressable
+                    style={[styles.chip, { flex: 1, alignItems: 'center', justifyContent: 'center' }]}
+                    onPress={() => {
+                      const cur = settings.alertDurationSeconds ?? 5;
+                      if (cur > 1) {
+                        persist({ ...settings, alertDurationSeconds: cur - 1 });
+                      }
+                    }}>
+                    <Text style={styles.chipTx}>− 1s</Text>
+                  </Pressable>
+
+                  <View style={{ flex: 1.2, alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={{ color: C.textSec, fontSize: 12 }}>
+                      Custom: <Text style={{ color: C.text, fontWeight: '700' }}>{settings.alertDurationSeconds ?? 5}s</Text>
+                    </Text>
+                  </View>
+
+                  <Pressable
+                    style={[styles.chip, { flex: 1, alignItems: 'center', justifyContent: 'center' }]}
+                    onPress={() => {
+                      const cur = settings.alertDurationSeconds ?? 5;
+                      if (cur < 60) {
+                        persist({ ...settings, alertDurationSeconds: cur + 1 });
+                      }
+                    }}>
+                    <Text style={styles.chipTx}>+ 1s</Text>
+                  </Pressable>
+
+                  <Pressable
+                    style={[styles.chip, { flex: 1.5, alignItems: 'center', justifyContent: 'center', borderColor: 'rgba(239, 68, 68, 0.4)' }]}
+                    onPress={async () => {
+                      try {
+                        await GlucoseBridge.acknowledgeAlert();
+                      } catch {}
+                    }}>
+                    <Text style={[styles.chipTx, { color: C.low }]}>⏹ Silence Now</Text>
                   </Pressable>
                 </View>
               </View>
@@ -2812,13 +2926,57 @@ export default function App() {
               </Pressable>
             </View>
 
-            {/* Account */}
+            {/* Account & Sensor */}
             <View style={styles.card}>
-              <Text style={styles.sectionTitle}>Account</Text>
+              <Text style={styles.sectionTitle}>Account & Sensor</Text>
               <Text style={styles.accountTx}>{settings.email}</Text>
               <Text style={styles.accountTx}>
-                Region: {settings.region} · Sensor: {sensorDaysLeft}d left
+                Region: {settings.region} · Sensor:{' '}
+                <Text style={{ color: C.accent, fontWeight: '700' }}>{sensorDaysLeft} days left</Text>
               </Text>
+
+              {/* Sensor duration adjust controls */}
+              <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: C.borderLight }}>
+                <Text style={[styles.toggleSub, { marginBottom: 8 }]}>Adjust Sensor Remaining Days:</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Pressable
+                    style={[styles.chip, { flex: 1, alignItems: 'center', justifyContent: 'center' }]}
+                    onPress={() => {
+                      const next = Math.max(0, sensorDaysLeft - 1);
+                      persist({
+                        ...settings,
+                        sensorDaysRemaining: next,
+                        sensorStartEpochMs: Date.now() - (15 - next) * 86400000,
+                      });
+                    }}>
+                    <Text style={styles.chipTx}>- 1 Day</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.chip, { flex: 1, alignItems: 'center', justifyContent: 'center' }]}
+                    onPress={() => {
+                      const next = Math.min(15, sensorDaysLeft + 1);
+                      persist({
+                        ...settings,
+                        sensorDaysRemaining: next,
+                        sensorStartEpochMs: Date.now() - (15 - next) * 86400000,
+                      });
+                    }}>
+                    <Text style={styles.chipTx}>+ 1 Day</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.chip, styles.chipOn, { flex: 1.3, alignItems: 'center', justifyContent: 'center' }]}
+                    onPress={() => {
+                      persist({
+                        ...settings,
+                        sensorDaysRemaining: 15,
+                        sensorStartEpochMs: Date.now(),
+                      });
+                    }}>
+                    <Text style={[styles.chipTx, styles.chipTxOn]}>New (15d)</Text>
+                  </Pressable>
+                </View>
+              </View>
+
               <Pressable onPress={onLogout} style={styles.signOutBtn}>
                 <Text style={styles.signOutTx}>Sign Out</Text>
               </Pressable>

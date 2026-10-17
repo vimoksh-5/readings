@@ -386,7 +386,7 @@ export async function libreGraph(
   token: string,
   patientId: string,
   accountId?: string,
-): Promise<{current: GlucoseMeasurement | null; history: GraphPoint[]}> {
+): Promise<{current: GlucoseMeasurement | null; history: GraphPoint[]; sensorDaysLeft?: number}> {
   const base = REGIONS[region];
   const res = await fetch(`${base}/llu/connections/${patientId}/graph`, {
     headers: authHeaders(token, accountId),
@@ -405,6 +405,21 @@ export async function libreGraph(
   const json = await res.json();
   const conn = json?.data?.connection;
   const current = parseMeasurement(conn?.glucoseMeasurement);
+
+  let sensorDaysLeft: number | undefined;
+  const sensorObj = conn?.sensor || (Array.isArray(conn?.sensors) ? conn.sensors[0] : null);
+  if (sensorObj?.a) {
+    const rawA = Number(sensorObj.a);
+    if (Number.isFinite(rawA) && rawA > 0) {
+      // 'a' is the sensor activation epoch timestamp in seconds (or ms)
+      const activationMs = rawA > 1e11 ? rawA : rawA * 1000;
+      const elapsedMs = Math.max(0, Date.now() - activationMs);
+      const lifespanMs = 15 * 86400 * 1000;
+      const remainingMs = lifespanMs - elapsedMs;
+      sensorDaysLeft = Math.max(1, Math.min(15, Math.ceil(remainingMs / (86400 * 1000))));
+    }
+  }
+
   const rawHistory: any[] = Array.isArray(json?.data?.graphData)
     ? json.data.graphData
     : [];
@@ -422,7 +437,7 @@ export async function libreGraph(
     })
     .filter((x): x is GraphPoint => x !== null)
     .sort((a, b) => a.epochMs - b.epochMs);
-  return {current, history};
+  return {current, history, sensorDaysLeft};
 }
 
 export async function libreLogbook(

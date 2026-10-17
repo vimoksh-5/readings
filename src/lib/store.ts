@@ -22,12 +22,14 @@ export interface AppSettings {
   audibleBroadcastEnabled: boolean;
   audibleBroadcastIntervalMin: number;
   alertSnoozeMinutes: number;
-  lowAlertTone: 'alarm' | 'notification' | 'silent';
-  highAlertTone: 'alarm' | 'notification' | 'silent';
+  lowAlertTone: 'alarm' | 'ring' | 'chime' | 'notification' | 'silent';
+  highAlertTone: 'alarm' | 'ring' | 'chime' | 'notification' | 'silent';
   lowVibration: 'urgent' | 'pulse' | 'gentle' | 'off';
   highVibration: 'urgent' | 'pulse' | 'gentle' | 'off';
   vibrateEnabled: boolean;
+  alertDurationSeconds: number;
   sensorStartEpochMs: number;
+  sensorDaysRemaining?: number;
   googleSheetsUrl?: string;
 }
 
@@ -64,11 +66,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
   audibleBroadcastIntervalMin: 15,
   alertSnoozeMinutes: 15,
   lowAlertTone: 'alarm',
-  highAlertTone: 'notification',
+  highAlertTone: 'alarm',
   lowVibration: 'urgent',
   highVibration: 'pulse',
   vibrateEnabled: true,
-  sensorStartEpochMs: Date.now() - 3 * 86400000, // default 3 days into 14/15-day cycle
+  alertDurationSeconds: 5,
+  sensorStartEpochMs: Date.now(),
+  sensorDaysRemaining: 15,
   googleSheetsUrl: '',
 };
 
@@ -85,7 +89,11 @@ export async function loadSettings(): Promise<AppSettings> {
       return DEFAULT_SETTINGS;
     }
     const parsed = JSON.parse(raw);
-    return {...DEFAULT_SETTINGS, ...parsed};
+    const loaded = {...DEFAULT_SETTINGS, ...parsed};
+    if (typeof loaded.sensorDaysRemaining === 'number' && loaded.sensorDaysRemaining <= 0) {
+      loaded.sensorDaysRemaining = 15;
+    }
+    return loaded;
   } catch {
     return DEFAULT_SETTINGS;
   }

@@ -25,6 +25,7 @@ interface GlucoseNative {
     lowVibration?: string,
     highVibration?: string,
     vibrateEnabled?: boolean,
+    alertDurationSeconds?: number,
   ): Promise<boolean>;
   updateServiceSettings(
     pollSeconds: number,
@@ -40,6 +41,7 @@ interface GlucoseNative {
     lowVibration: string,
     highVibration: string,
     vibrateEnabled: boolean,
+    alertDurationSeconds: number,
   ): Promise<boolean>;
   stopService(): Promise<void>;
   isServiceRunning(): Promise<boolean>;
