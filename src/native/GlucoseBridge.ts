@@ -17,6 +17,19 @@ interface GlucoseNative {
     lowMgDl: number,
     highMgDl: number,
     alertsEnabled: boolean,
+    silentNotifIntervalMin?: number,
+    audibleBroadcastEnabled?: boolean,
+    audibleBroadcastIntervalMin?: number,
+  ): Promise<boolean>;
+  updateServiceSettings(
+    pollSeconds: number,
+    units: string,
+    lowMgDl: number,
+    highMgDl: number,
+    alertsEnabled: boolean,
+    silentNotifIntervalMin: number,
+    audibleBroadcastEnabled: boolean,
+    audibleBroadcastIntervalMin: number,
   ): Promise<boolean>;
   stopService(): Promise<void>;
   isServiceRunning(): Promise<boolean>;

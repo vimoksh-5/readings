@@ -856,6 +856,20 @@ export default function App() {
   const persist = useCallback(async (next: AppSettings) => {
     setSettings(next);
     await saveSettings(next);
+    if (Platform.OS === 'android') {
+      try {
+        await GlucoseBridge.updateServiceSettings(
+          next.pollSeconds,
+          next.units,
+          next.lowThresholdMgDl,
+          next.highThresholdMgDl,
+          next.alertsEnabled,
+          next.silentNotifIntervalMin ?? 10,
+          next.audibleBroadcastEnabled ?? false,
+          next.audibleBroadcastIntervalMin ?? 15,
+        );
+      } catch { }
+    }
   }, []);
 
   const ensureAndroidPermissions = useCallback(async () => {
@@ -1024,6 +1038,9 @@ export default function App() {
         next.lowThresholdMgDl,
         next.highThresholdMgDl,
         next.alertsEnabled,
+        next.silentNotifIntervalMin ?? 10,
+        next.audibleBroadcastEnabled ?? false,
+        next.audibleBroadcastIntervalMin ?? 15,
       );
       setSvcRunning(ok);
       setPassword('');
@@ -1066,6 +1083,9 @@ export default function App() {
           cfg.lowThresholdMgDl,
           cfg.highThresholdMgDl,
           cfg.alertsEnabled,
+          cfg.silentNotifIntervalMin ?? 10,
+          cfg.audibleBroadcastEnabled ?? false,
+          cfg.audibleBroadcastIntervalMin ?? 15,
         );
         setSvcRunning(ok);
         if (!ok) {
@@ -2172,11 +2192,14 @@ export default function App() {
           <>
             {/* Notifications */}
             <View style={styles.card}>
-              <Text style={styles.sectionTitle}>Notifications</Text>
+              <Text style={styles.sectionTitle}>Notifications & Intervals</Text>
 
               <Text style={styles.settLabel}>Silent Update Interval</Text>
+              <Text style={styles.toggleSub}>
+                Controls how often the ongoing notification shade updates (1m, 5m, 10m, 15m, 30m). Urgent highs and lows always alert immediately.
+              </Text>
               <View style={styles.chipRow}>
-                {[1, 5, 10, 15].map(m => (
+                {[1, 5, 10, 15, 30].map(m => (
                   <Pressable
                     key={m}
                     onPress={() =>
@@ -2204,7 +2227,7 @@ export default function App() {
                     audibleBroadcastEnabled: !settings.audibleBroadcastEnabled,
                   })
                 }
-                style={styles.toggleRow}>
+                style={[styles.toggleRow, { marginTop: 16 }]}>
                 <View
                   style={[
                     styles.checkbox,
@@ -2215,9 +2238,9 @@ export default function App() {
                   )}
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.toggleLabel}>Audible Broadcasts</Text>
+                  <Text style={styles.toggleLabel}>Audible Periodic Broadcasts</Text>
                   <Text style={styles.toggleSub}>
-                    Sound/announce reading at intervals
+                    Plays an audible chime/notification with your current reading at set intervals (even while in range)
                   </Text>
                 </View>
               </Pressable>
@@ -2244,7 +2267,7 @@ export default function App() {
                           settings.audibleBroadcastIntervalMin === m &&
                           styles.chipTxOn,
                         ]}>
-                        {m}m
+                        Every {m}m
                       </Text>
                     </Pressable>
                   ))}

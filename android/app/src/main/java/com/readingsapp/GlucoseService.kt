@@ -39,11 +39,51 @@ class GlucoseService : Service() {
 
     const val NOTIF_ID = 1001
     const val ALERT_NOTIF_ID = 1002
+    const val BROADCAST_NOTIF_ID = 1003
     const val ACTION_REFRESH = "com.readingsapp.REFRESH"
     const val ACTION_STOP = "com.readingsapp.STOP"
+    const val ACTION_UPDATE_SETTINGS = "com.readingsapp.UPDATE_SETTINGS"
 
     /** Minimum interval between audible alert notifications (ms). */
     const val ALERT_THROTTLE_MS = 10L * 60 * 1000  // 10 minutes
+
+    fun fireBroadcastNotification(
+      context: Context,
+      display: String,
+      arrow: String,
+      state: String
+    ) {
+      val openIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.let {
+        PendingIntent.getActivity(
+          context, 3, it,
+          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+      }
+      val title = "Reading: $display $arrow"
+      val body = "Periodic glucose update ($state). Tap to open Readings."
+      val notif = NotificationCompat.Builder(context, CHANNEL_ALERT)
+        .setContentTitle(title)
+        .setContentText(body)
+        .setSmallIcon(R.mipmap.ic_launcher)
+        .setContentIntent(openIntent)
+        .setAutoCancel(true)
+        .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+        .setCategory(NotificationCompat.CATEGORY_EVENT)
+        .setPriority(NotificationCompat.PRIORITY_HIGH)
+        .setDefaults(NotificationCompat.DEFAULT_ALL)
+        .build()
+
+      try {
+        val mgr = context.getSystemService(NotificationManager::class.java)
+        mgr?.notify(BROADCAST_NOTIF_ID, notif)
+      } catch (_: Exception) {}
+
+      try {
+        val alertUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        val r = RingtoneManager.getRingtone(context, alertUri)
+        r?.play()
+      } catch (_: Exception) {}
+    }
 
     fun fireAlertNotification(
       context: Context,
@@ -126,6 +166,7 @@ class GlucoseService : Service() {
 
     @Volatile var running = false
     @Volatile var lastAlertMs = 0L
+    @Volatile var lastBroadcastMs = 0L
     @Volatile var lastNotifiedTitle = ""
     @Volatile var lastStatusNotifTime = 0L
   }
@@ -209,6 +250,22 @@ class GlucoseService : Service() {
         thread { pollOnce() }
         return START_STICKY
       }
+      ACTION_UPDATE_SETTINGS -> {
+        intent.extras?.let { b ->
+          val prefs = securePrefs()
+          prefs.edit()
+            .putInt("pollSeconds", b.getInt("pollSeconds", prefs.getInt("pollSeconds", 60)).coerceIn(30, 900))
+            .putString("units", b.getString("units") ?: prefs.getString("units", "mgdl"))
+            .putInt("lowMgDl", b.getInt("lowMgDl", prefs.getInt("lowMgDl", 70)))
+            .putInt("highMgDl", b.getInt("highMgDl", prefs.getInt("highMgDl", 180)))
+            .putBoolean("alertsEnabled", b.getBoolean("alertsEnabled", prefs.getBoolean("alertsEnabled", true)))
+            .putInt("silentNotifIntervalMin", b.getInt("silentNotifIntervalMin", prefs.getInt("silentNotifIntervalMin", 10)).coerceIn(1, 60))
+            .putBoolean("audibleBroadcastEnabled", b.getBoolean("audibleBroadcastEnabled", prefs.getBoolean("audibleBroadcastEnabled", false)))
+            .putInt("audibleBroadcastIntervalMin", b.getInt("audibleBroadcastIntervalMin", prefs.getInt("audibleBroadcastIntervalMin", 15)).coerceIn(5, 120))
+            .apply()
+        }
+        return START_STICKY
+      }
     }
     // Config from intent extras (JS passes these)
     intent?.extras?.let { b ->
@@ -219,6 +276,9 @@ class GlucoseService : Service() {
         .putInt("lowMgDl", b.getInt("lowMgDl", prefs.getInt("lowMgDl", 70)))
         .putInt("highMgDl", b.getInt("highMgDl", prefs.getInt("highMgDl", 180)))
         .putBoolean("alertsEnabled", b.getBoolean("alertsEnabled", prefs.getBoolean("alertsEnabled", true)))
+        .putInt("silentNotifIntervalMin", b.getInt("silentNotifIntervalMin", prefs.getInt("silentNotifIntervalMin", 10)).coerceIn(1, 60))
+        .putBoolean("audibleBroadcastEnabled", b.getBoolean("audibleBroadcastEnabled", prefs.getBoolean("audibleBroadcastEnabled", false)))
+        .putInt("audibleBroadcastIntervalMin", b.getInt("audibleBroadcastIntervalMin", prefs.getInt("audibleBroadcastIntervalMin", 15)).coerceIn(5, 120))
         .apply()
     }
 
@@ -436,21 +496,39 @@ class GlucoseService : Service() {
         else -> "in range"
       }
 
+      val isCritical = isDead || value < low || value > high
+
       if (isDead) {
         updateStatusNotification(
           "⚠ Sensor ended / No recent data",
           "Last reading was $display ($arrow) · check sensor",
-          force = true
+          force = true,
+          isCritical = true
         )
       } else {
         val title = if (isStale) "$display $arrow — Stale" else "$display $arrow — $state"
-        updateStatusNotification(title, timeStr(epoch) + " · tap to open")
+        updateStatusNotification(
+          title,
+          timeStr(epoch) + " · tap to open",
+          force = false,
+          isCritical = isCritical
+        )
       }
 
-      // Audible alert: only when fresh + out of range + alerts enabled + throttle check (every 10m max)
+      val now = System.currentTimeMillis()
+
+      // Audible periodic broadcast: announcements at interval set by user (e.g. 10m, 15m, 30m, 60m)
+      val audibleBroadcast = prefs.getBoolean("audibleBroadcastEnabled", false)
+      val broadcastIntervalMin = prefs.getInt("audibleBroadcastIntervalMin", 15).coerceIn(5, 120)
+      val broadcastIntervalMs = broadcastIntervalMin * 60 * 1000L
+      if (audibleBroadcast && !isStale && !isDead && (now - lastBroadcastMs >= broadcastIntervalMs)) {
+        lastBroadcastMs = now
+        fireBroadcastNotification(this, display, arrow, state)
+      }
+
+      // Urgent Audible alert: only when fresh + out of range + alerts enabled + throttle check (every 10m max)
       val alerts = prefs.getBoolean("alertsEnabled", true)
       val outOfRange = value < low || value > high
-      val now = System.currentTimeMillis()
       if (alerts && !isStale && !isDead && outOfRange && (now - lastAlertMs >= ALERT_THROTTLE_MS)) {
         lastAlertMs = now
         fireAlertNotification(this, display, arrow, state, value < low, false)
@@ -498,16 +576,26 @@ class GlucoseService : Service() {
     if (last > 0) {
       val units = prefs.getString("units", "mgdl") ?: "mgdl"
       val display = if (units == "mmol") String.format(Locale.US, "%.1f mmol/L", last / 18.01559) else "$last mg/dL"
-      updateStatusNotification("$display · $title", text)
+      updateStatusNotification("$display · $title", text, force = true, isCritical = true)
     } else {
-      updateStatusNotification(title, text)
+      updateStatusNotification(title, text, force = true, isCritical = true)
     }
   }
 
-  private fun updateStatusNotification(title: String, text: String, force: Boolean = false) {
+  private fun updateStatusNotification(
+    title: String,
+    text: String,
+    force: Boolean = false,
+    isCritical: Boolean = false
+  ) {
     val now = System.currentTimeMillis()
-    // Don't re-post the notification every 60s if the title hasn't changed and <10 min have elapsed
-    if (!force && title == lastNotifiedTitle && (now - lastStatusNotifTime < 10L * 60 * 1000)) {
+    val prefs = securePrefs()
+    val silentIntervalMin = prefs.getInt("silentNotifIntervalMin", 10).coerceIn(1, 60)
+    val intervalMs = silentIntervalMin * 60 * 1000L
+
+    // If not a forced update or critical state (low/high/ended),
+    // respect the user's configured silent update interval
+    if (!force && !isCritical && (now - lastStatusNotifTime < intervalMs)) {
       return
     }
     lastNotifiedTitle = title

@@ -94,6 +94,9 @@ class GlucoseModule(private val reactContext: ReactApplicationContext) :
   fun startService(
     pollSeconds: Double, units: String,
     lowMgDl: Double, highMgDl: Double, alertsEnabled: Boolean,
+    silentNotifIntervalMin: Double,
+    audibleBroadcastEnabled: Boolean,
+    audibleBroadcastIntervalMin: Double,
     promise: Promise
   ) {
     try {
@@ -103,6 +106,9 @@ class GlucoseModule(private val reactContext: ReactApplicationContext) :
         .putInt("lowMgDl", lowMgDl.toInt())
         .putInt("highMgDl", highMgDl.toInt())
         .putBoolean("alertsEnabled", alertsEnabled)
+        .putInt("silentNotifIntervalMin", silentNotifIntervalMin.toInt().coerceIn(1, 60))
+        .putBoolean("audibleBroadcastEnabled", audibleBroadcastEnabled)
+        .putInt("audibleBroadcastIntervalMin", audibleBroadcastIntervalMin.toInt().coerceIn(5, 120))
         .apply()
       val intent = Intent(reactContext, GlucoseService::class.java).apply {
         putExtra("pollSeconds", pollSeconds.toInt().coerceIn(30, 900))
@@ -110,11 +116,55 @@ class GlucoseModule(private val reactContext: ReactApplicationContext) :
         putExtra("lowMgDl", lowMgDl.toInt())
         putExtra("highMgDl", highMgDl.toInt())
         putExtra("alertsEnabled", alertsEnabled)
+        putExtra("silentNotifIntervalMin", silentNotifIntervalMin.toInt().coerceIn(1, 60))
+        putExtra("audibleBroadcastEnabled", audibleBroadcastEnabled)
+        putExtra("audibleBroadcastIntervalMin", audibleBroadcastIntervalMin.toInt().coerceIn(5, 120))
       }
       ContextCompat.startForegroundService(reactContext, intent)
       promise.resolve(true)
     } catch (e: Exception) {
       promise.reject("START_FAILED", e.message)
+    }
+  }
+
+  @ReactMethod
+  fun updateServiceSettings(
+    pollSeconds: Double, units: String,
+    lowMgDl: Double, highMgDl: Double, alertsEnabled: Boolean,
+    silentNotifIntervalMin: Double,
+    audibleBroadcastEnabled: Boolean,
+    audibleBroadcastIntervalMin: Double,
+    promise: Promise
+  ) {
+    try {
+      securePrefs().edit()
+        .putInt("pollSeconds", pollSeconds.toInt().coerceIn(30, 900))
+        .putString("units", units)
+        .putInt("lowMgDl", lowMgDl.toInt())
+        .putInt("highMgDl", highMgDl.toInt())
+        .putBoolean("alertsEnabled", alertsEnabled)
+        .putInt("silentNotifIntervalMin", silentNotifIntervalMin.toInt().coerceIn(1, 60))
+        .putBoolean("audibleBroadcastEnabled", audibleBroadcastEnabled)
+        .putInt("audibleBroadcastIntervalMin", audibleBroadcastIntervalMin.toInt().coerceIn(5, 120))
+        .apply()
+
+      if (GlucoseService.running) {
+        val intent = Intent(reactContext, GlucoseService::class.java).apply {
+          action = GlucoseService.ACTION_UPDATE_SETTINGS
+          putExtra("pollSeconds", pollSeconds.toInt().coerceIn(30, 900))
+          putExtra("units", units)
+          putExtra("lowMgDl", lowMgDl.toInt())
+          putExtra("highMgDl", highMgDl.toInt())
+          putExtra("alertsEnabled", alertsEnabled)
+          putExtra("silentNotifIntervalMin", silentNotifIntervalMin.toInt().coerceIn(1, 60))
+          putExtra("audibleBroadcastEnabled", audibleBroadcastEnabled)
+          putExtra("audibleBroadcastIntervalMin", audibleBroadcastIntervalMin.toInt().coerceIn(5, 120))
+        }
+        reactContext.startService(intent)
+      }
+      promise.resolve(true)
+    } catch (e: Exception) {
+      promise.reject("UPDATE_SETTINGS_FAILED", e.message)
     }
   }
 
