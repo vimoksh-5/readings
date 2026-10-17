@@ -1,3 +1,4 @@
+
 # Readings — Glanceable Blood Glucose Monitor (Android)
 
 React Native + native Kotlin foreground service for Libre 2 Plus (and other FreeStyle Libre sensors) via LibreLinkUp cloud sync.
@@ -10,6 +11,9 @@ React Native + native Kotlin foreground service for Libre 2 Plus (and other Free
 - **📱 Resizable Home Screen Widget:** Flexible horizontal and vertical sizing (from 1x1 up to 4x3 cells), color-coded range indicators, and automatic stale-data warnings.
 - **⚠ Smart Stale Data / Sensor Ended Detection:** Automatically dims and flags readings older than 15 minutes as STALE and older than 30 minutes as SENSOR ENDED across the app, widget, floating bubble, and notification shade.
 - **🖼️ Custom App Icon:** Clean, modern blood drop & glucose wave icon across all Android launcher densities.
+<img width="240" height="604" alt="Screenshot_20261017-174016" src="https://github.com/user-attachments/assets/908ce149-78fa-4e0d-8355-abe982e5bc7e" />
+<img width="240" height="604" alt="Screenshot_20261017-173939" src="https://github.com/user-attachments/assets/639c9120-2fa9-4832-88ff-b5153dfdbb6b" />
+<img width="240" height="604" alt="Screenshot_20261017-173926" src="https://github.com/user-attachments/assets/a5c5b071-28ca-452e-b1c6-8e752a7db007" />
 
 ## Requirements
 
