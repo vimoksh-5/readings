@@ -1,3 +1,4 @@
 <resources>
-    <string name="app_name">ReadingsApp</string>
+    <string name="app_name">Readings</string>
+    <string name="widget_desc">Live blood sugar reading</string>
 </resources>
