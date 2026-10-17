@@ -8,6 +8,7 @@ import React, {
 import {
   Alert,
   Animated,
+  AppState,
   Dimensions,
   Modal,
   PermissionsAndroid,
@@ -850,7 +851,22 @@ export default function App() {
           setLastSyncMs(p.epochMs);
         }
       } catch { }
+
+      // Silence and acknowledge any pending alert when app is opened
+      try {
+        await GlucoseBridge.acknowledgeAlert();
+      } catch { }
     })();
+
+    const appStateSub = AppState.addEventListener('change', state => {
+      if (state === 'active') {
+        GlucoseBridge.acknowledgeAlert().catch(() => {});
+      }
+    });
+
+    return () => {
+      appStateSub.remove();
+    };
   }, []);
 
   const persist = useCallback(async (next: AppSettings) => {
@@ -2294,7 +2310,7 @@ export default function App() {
             <View style={styles.card}>
               <Text style={styles.sectionTitle}>Alert Sounds & Haptics</Text>
               <Text style={styles.toggleSub}>
-                Customize separate sound tones and vibration patterns for hypoglycemia (&lt; {settings.lowThresholdMgDl}) and hyperglycemia (&gt; {settings.highThresholdMgDl}).
+                Customize sound tones and vibrations for hypoglycemia (&lt; {settings.lowThresholdMgDl}) and hyperglycemia (&gt; {settings.highThresholdMgDl}). Alarms automatically silence after 3.5s or instantly upon tapping or acknowledging.
               </Text>
 
               {/* Master Vibration Switch */}

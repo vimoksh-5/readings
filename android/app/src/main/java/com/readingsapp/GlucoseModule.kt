@@ -325,6 +325,16 @@ class GlucoseModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun acknowledgeAlert(promise: Promise) {
+    try {
+      GlucoseService.acknowledgeAlert(reactContext)
+      promise.resolve(true)
+    } catch (e: Exception) {
+      promise.reject("ACK_FAILED", e.message)
+    }
+  }
+
+  @ReactMethod
   fun openNotificationSettings(channelType: String?, promise: Promise) {
     try {
       val channelId = when (channelType?.lowercase()) {

@@ -53,6 +53,7 @@ interface GlucoseNative {
   requestOverlayPermission(): Promise<boolean>;
   // Notifications & Sound
   testAlertNotification(isLow: boolean, valueMgDl: number): Promise<boolean>;
+  acknowledgeAlert(): Promise<boolean>;
   openNotificationSettings(channelType?: 'low' | 'high' | 'broadcast' | 'status'): Promise<boolean>;
 }
 

@@ -11,6 +11,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
+import android.media.Ringtone
 import android.media.RingtoneManager
 import android.os.Build
 import android.os.Handler
@@ -49,9 +50,50 @@ class GlucoseService : Service() {
     const val ACTION_REFRESH = "com.readingsapp.REFRESH"
     const val ACTION_STOP = "com.readingsapp.STOP"
     const val ACTION_UPDATE_SETTINGS = "com.readingsapp.UPDATE_SETTINGS"
+    const val ACTION_ACKNOWLEDGE_ALERT = "com.readingsapp.ACKNOWLEDGE_ALERT"
 
     /** Minimum interval between audible alert notifications (ms). */
     const val ALERT_THROTTLE_MS = 10L * 60 * 1000  // 10 minutes
+
+    @Volatile private var activeRingtone: Ringtone? = null
+    private val audioStopHandler = Handler(Looper.getMainLooper())
+    private var audioStopRunnable: Runnable? = null
+
+    fun stopAlertAudio() {
+      try {
+        audioStopRunnable?.let { audioStopHandler.removeCallbacks(it) }
+        audioStopRunnable = null
+        activeRingtone?.let {
+          if (it.isPlaying) {
+            it.stop()
+          }
+        }
+        activeRingtone = null
+      } catch (_: Exception) {}
+    }
+
+    fun acknowledgeAlert(context: Context) {
+      stopAlertAudio()
+      try {
+        val v = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+          (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? android.os.VibratorManager)?.defaultVibrator
+        } else {
+          @Suppress("DEPRECATION")
+          context.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+        }
+        v?.cancel()
+      } catch (_: Exception) {}
+
+      try {
+        val mgr = context.getSystemService(NotificationManager::class.java)
+        mgr?.cancel(ALERT_LOW_NOTIF_ID)
+        mgr?.cancel(ALERT_HIGH_NOTIF_ID)
+        mgr?.cancel(BROADCAST_NOTIF_ID)
+      } catch (_: Exception) {}
+
+      lastAlertMs = System.currentTimeMillis()
+      lastBroadcastMs = System.currentTimeMillis()
+    }
 
     fun getSecurePrefs(context: Context): SharedPreferences {
       return try {
@@ -135,12 +177,20 @@ class GlucoseService : Service() {
         else -> longArrayOf(0, 400, 200, 400)
       }
 
-      val openIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.let {
+      val openIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        putExtra("acknowledged_alert", true)
+      }?.let {
         PendingIntent.getActivity(
           context, 2, it,
           PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
       }
+      val ackIntent = PendingIntent.getService(
+        context, 10,
+        Intent(context, GlucoseService::class.java).setAction(ACTION_ACKNOWLEDGE_ALERT),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+      )
       val prefix = if (isTest) "[TEST] " else ""
       val title = if (isLow) "${prefix}⚠ LOW GLUCOSE: $display $arrow" else "${prefix}⚠ HIGH GLUCOSE: $display $arrow"
       val body = if (isTest) {
@@ -157,7 +207,10 @@ class GlucoseService : Service() {
         .setColor(alertColor)
         .setLargeIcon(BitmapFactory.decodeResource(context.resources, R.mipmap.ic_launcher))
         .setContentIntent(openIntent)
+        .setDeleteIntent(ackIntent)      // Swiping away acknowledges and stops sound!
+        .addAction(0, "✓ Acknowledge", ackIntent) // Explicit button to acknowledge!
         .setAutoCancel(true)
+        .setOngoing(false)               // Can always be dismissed!
         .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
         .setCategory(if (isLow) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_EVENT)
         .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -191,9 +244,10 @@ class GlucoseService : Service() {
         } catch (_: Exception) {}
       }
 
-      // Trigger custom audio playback
+      // Trigger custom audio playback with guaranteed auto-stop
       if (tone != "silent") {
         try {
+          stopAlertAudio()
           val soundUri = if (tone == "alarm") {
             RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
               ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
@@ -208,6 +262,19 @@ class GlucoseService : Service() {
               .build()
           }
           r?.play()
+          activeRingtone = r
+
+          // Auto-stop after 3.5 seconds MAX so alarm never loops endlessly!
+          val stopRunnable = Runnable {
+            try {
+              if (activeRingtone === r) {
+                r?.stop()
+                activeRingtone = null
+              }
+            } catch (_: Exception) {}
+          }
+          audioStopRunnable = stopRunnable
+          audioStopHandler.postDelayed(stopRunnable, 3500L)
         } catch (_: Exception) {}
       }
     }
@@ -359,6 +426,10 @@ class GlucoseService : Service() {
       ACTION_STOP -> {
         stopSelf()
         return START_NOT_STICKY
+      }
+      ACTION_ACKNOWLEDGE_ALERT -> {
+        acknowledgeAlert(this)
+        return START_STICKY
       }
       ACTION_REFRESH -> {
         thread { pollOnce() }
@@ -742,6 +813,10 @@ class GlucoseService : Service() {
       this, 1, Intent(this, GlucoseService::class.java).setAction(ACTION_REFRESH),
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     )
+    val stopIntent = PendingIntent.getService(
+      this, 2, Intent(this, GlucoseService::class.java).setAction(ACTION_STOP),
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
     return NotificationCompat.Builder(this, CHANNEL_STATUS)
       .setContentTitle(title)
       .setContentText(text)
@@ -749,18 +824,20 @@ class GlucoseService : Service() {
       .setColor(0xFF00E5FF.toInt())
       .setLargeIcon(BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher))
       .setContentIntent(openIntent)
-      .setOngoing(true)
+      .setOngoing(false)               // Allow user to swipe away if desired
       .setSilent(true)                 // purely silent
       .setOnlyAlertOnce(true)          // never buzz or alert
       .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
       .setCategory(NotificationCompat.CATEGORY_STATUS)
       .setPriority(NotificationCompat.PRIORITY_LOW)
       .addAction(android.R.drawable.ic_menu_rotate, "Refresh", refreshIntent)
+      .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", stopIntent)
       .build()
   }
 
 
   override fun onDestroy() {
+    stopAlertAudio()
     stopFlag = true
     running = false
     super.onDestroy()
