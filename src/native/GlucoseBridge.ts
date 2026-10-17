@@ -20,6 +20,11 @@ interface GlucoseNative {
     silentNotifIntervalMin?: number,
     audibleBroadcastEnabled?: boolean,
     audibleBroadcastIntervalMin?: number,
+    lowAlertTone?: string,
+    highAlertTone?: string,
+    lowVibration?: string,
+    highVibration?: string,
+    vibrateEnabled?: boolean,
   ): Promise<boolean>;
   updateServiceSettings(
     pollSeconds: number,
@@ -30,6 +35,11 @@ interface GlucoseNative {
     silentNotifIntervalMin: number,
     audibleBroadcastEnabled: boolean,
     audibleBroadcastIntervalMin: number,
+    lowAlertTone: string,
+    highAlertTone: string,
+    lowVibration: string,
+    highVibration: string,
+    vibrateEnabled: boolean,
   ): Promise<boolean>;
   stopService(): Promise<void>;
   isServiceRunning(): Promise<boolean>;
@@ -43,7 +53,7 @@ interface GlucoseNative {
   requestOverlayPermission(): Promise<boolean>;
   // Notifications & Sound
   testAlertNotification(isLow: boolean, valueMgDl: number): Promise<boolean>;
-  openNotificationSettings(): Promise<boolean>;
+  openNotificationSettings(channelType?: 'low' | 'high' | 'broadcast' | 'status'): Promise<boolean>;
 }
 
 const LINKING_ERROR =

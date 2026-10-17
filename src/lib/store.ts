@@ -22,6 +22,11 @@ export interface AppSettings {
   audibleBroadcastEnabled: boolean;
   audibleBroadcastIntervalMin: number;
   alertSnoozeMinutes: number;
+  lowAlertTone: 'alarm' | 'notification' | 'silent';
+  highAlertTone: 'alarm' | 'notification' | 'silent';
+  lowVibration: 'urgent' | 'pulse' | 'gentle' | 'off';
+  highVibration: 'urgent' | 'pulse' | 'gentle' | 'off';
+  vibrateEnabled: boolean;
   sensorStartEpochMs: number;
   googleSheetsUrl?: string;
 }
@@ -58,6 +63,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   audibleBroadcastEnabled: false,
   audibleBroadcastIntervalMin: 15,
   alertSnoozeMinutes: 15,
+  lowAlertTone: 'alarm',
+  highAlertTone: 'notification',
+  lowVibration: 'urgent',
+  highVibration: 'pulse',
+  vibrateEnabled: true,
   sensorStartEpochMs: Date.now() - 3 * 86400000, // default 3 days into 14/15-day cycle
   googleSheetsUrl: '',
 };

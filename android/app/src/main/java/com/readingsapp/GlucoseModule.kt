@@ -97,6 +97,11 @@ class GlucoseModule(private val reactContext: ReactApplicationContext) :
     silentNotifIntervalMin: Double,
     audibleBroadcastEnabled: Boolean,
     audibleBroadcastIntervalMin: Double,
+    lowAlertTone: String,
+    highAlertTone: String,
+    lowVibration: String,
+    highVibration: String,
+    vibrateEnabled: Boolean,
     promise: Promise
   ) {
     try {
@@ -109,6 +114,11 @@ class GlucoseModule(private val reactContext: ReactApplicationContext) :
         .putInt("silentNotifIntervalMin", silentNotifIntervalMin.toInt().coerceIn(1, 60))
         .putBoolean("audibleBroadcastEnabled", audibleBroadcastEnabled)
         .putInt("audibleBroadcastIntervalMin", audibleBroadcastIntervalMin.toInt().coerceIn(5, 120))
+        .putString("lowAlertTone", lowAlertTone)
+        .putString("highAlertTone", highAlertTone)
+        .putString("lowVibration", lowVibration)
+        .putString("highVibration", highVibration)
+        .putBoolean("vibrateEnabled", vibrateEnabled)
         .apply()
       val intent = Intent(reactContext, GlucoseService::class.java).apply {
         putExtra("pollSeconds", pollSeconds.toInt().coerceIn(30, 900))
@@ -119,6 +129,11 @@ class GlucoseModule(private val reactContext: ReactApplicationContext) :
         putExtra("silentNotifIntervalMin", silentNotifIntervalMin.toInt().coerceIn(1, 60))
         putExtra("audibleBroadcastEnabled", audibleBroadcastEnabled)
         putExtra("audibleBroadcastIntervalMin", audibleBroadcastIntervalMin.toInt().coerceIn(5, 120))
+        putExtra("lowAlertTone", lowAlertTone)
+        putExtra("highAlertTone", highAlertTone)
+        putExtra("lowVibration", lowVibration)
+        putExtra("highVibration", highVibration)
+        putExtra("vibrateEnabled", vibrateEnabled)
       }
       ContextCompat.startForegroundService(reactContext, intent)
       promise.resolve(true)
@@ -134,6 +149,11 @@ class GlucoseModule(private val reactContext: ReactApplicationContext) :
     silentNotifIntervalMin: Double,
     audibleBroadcastEnabled: Boolean,
     audibleBroadcastIntervalMin: Double,
+    lowAlertTone: String,
+    highAlertTone: String,
+    lowVibration: String,
+    highVibration: String,
+    vibrateEnabled: Boolean,
     promise: Promise
   ) {
     try {
@@ -146,6 +166,11 @@ class GlucoseModule(private val reactContext: ReactApplicationContext) :
         .putInt("silentNotifIntervalMin", silentNotifIntervalMin.toInt().coerceIn(1, 60))
         .putBoolean("audibleBroadcastEnabled", audibleBroadcastEnabled)
         .putInt("audibleBroadcastIntervalMin", audibleBroadcastIntervalMin.toInt().coerceIn(5, 120))
+        .putString("lowAlertTone", lowAlertTone)
+        .putString("highAlertTone", highAlertTone)
+        .putString("lowVibration", lowVibration)
+        .putString("highVibration", highVibration)
+        .putBoolean("vibrateEnabled", vibrateEnabled)
         .apply()
 
       if (GlucoseService.running) {
@@ -159,6 +184,11 @@ class GlucoseModule(private val reactContext: ReactApplicationContext) :
           putExtra("silentNotifIntervalMin", silentNotifIntervalMin.toInt().coerceIn(1, 60))
           putExtra("audibleBroadcastEnabled", audibleBroadcastEnabled)
           putExtra("audibleBroadcastIntervalMin", audibleBroadcastIntervalMin.toInt().coerceIn(5, 120))
+          putExtra("lowAlertTone", lowAlertTone)
+          putExtra("highAlertTone", highAlertTone)
+          putExtra("lowVibration", lowVibration)
+          putExtra("highVibration", highVibration)
+          putExtra("vibrateEnabled", vibrateEnabled)
         }
         reactContext.startService(intent)
       }
@@ -295,12 +325,19 @@ class GlucoseModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
-  fun openNotificationSettings(promise: Promise) {
+  fun openNotificationSettings(channelType: String?, promise: Promise) {
     try {
+      val channelId = when (channelType?.lowercase()) {
+        "low" -> GlucoseService.CHANNEL_ALERT_LOW
+        "high" -> GlucoseService.CHANNEL_ALERT_HIGH
+        "broadcast" -> GlucoseService.CHANNEL_BROADCAST
+        "status" -> GlucoseService.CHANNEL_STATUS
+        else -> GlucoseService.CHANNEL_ALERT_LOW
+      }
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         val intent = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
           putExtra(Settings.EXTRA_APP_PACKAGE, reactContext.packageName)
-          putExtra(Settings.EXTRA_CHANNEL_ID, GlucoseService.CHANNEL_ALERT)
+          putExtra(Settings.EXTRA_CHANNEL_ID, channelId)
           addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         reactContext.startActivity(intent)

@@ -34,18 +34,38 @@ class GlucoseService : Service() {
   companion object {
     /** Silent channel for the ongoing foreground notification. */
     const val CHANNEL_STATUS = "glucose_status_v3"
-    /** Audible channel for low/high alert notifications. */
-    const val CHANNEL_ALERT = "glucose_alerts_v3"
+    /** Urgent low alerts channel (< 70 mg/dL). */
+    const val CHANNEL_ALERT_LOW = "glucose_alerts_low_v4"
+    /** High alerts channel (> 180 mg/dL). */
+    const val CHANNEL_ALERT_HIGH = "glucose_alerts_high_v4"
+    /** Periodic reading broadcast chime. */
+    const val CHANNEL_BROADCAST = "glucose_broadcast_v4"
 
     const val NOTIF_ID = 1001
-    const val ALERT_NOTIF_ID = 1002
-    const val BROADCAST_NOTIF_ID = 1003
+    const val ALERT_LOW_NOTIF_ID = 1002
+    const val ALERT_HIGH_NOTIF_ID = 1003
+    const val BROADCAST_NOTIF_ID = 1004
     const val ACTION_REFRESH = "com.readingsapp.REFRESH"
     const val ACTION_STOP = "com.readingsapp.STOP"
     const val ACTION_UPDATE_SETTINGS = "com.readingsapp.UPDATE_SETTINGS"
 
     /** Minimum interval between audible alert notifications (ms). */
     const val ALERT_THROTTLE_MS = 10L * 60 * 1000  // 10 minutes
+
+    fun getSecurePrefs(context: Context): SharedPreferences {
+      return try {
+        val masterKey = MasterKey.Builder(context)
+          .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+          .build()
+        EncryptedSharedPreferences.create(
+          context, "glucose_secure", masterKey,
+          EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+          EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+      } catch (_: Exception) {
+        context.getSharedPreferences("glucose_secure_fallback", Context.MODE_PRIVATE)
+      }
+    }
 
     fun fireBroadcastNotification(
       context: Context,
@@ -61,7 +81,7 @@ class GlucoseService : Service() {
       }
       val title = "Reading: $display $arrow"
       val body = "Periodic glucose update ($state). Tap to open Readings."
-      val notif = NotificationCompat.Builder(context, CHANNEL_ALERT)
+      val notif = NotificationCompat.Builder(context, CHANNEL_BROADCAST)
         .setContentTitle(title)
         .setContentText(body)
         .setSmallIcon(R.mipmap.ic_launcher)
@@ -93,6 +113,25 @@ class GlucoseService : Service() {
       isLow: Boolean,
       isTest: Boolean = false
     ) {
+      val prefs = getSecurePrefs(context)
+      val channelId = if (isLow) CHANNEL_ALERT_LOW else CHANNEL_ALERT_HIGH
+      val notifId = if (isLow) ALERT_LOW_NOTIF_ID else ALERT_HIGH_NOTIF_ID
+
+      val tone = if (isLow) prefs.getString("lowAlertTone", "alarm") ?: "alarm"
+                 else prefs.getString("highAlertTone", "notification") ?: "notification"
+      val vibStyle = if (isLow) prefs.getString("lowVibration", "urgent") ?: "urgent"
+                     else prefs.getString("highVibration", "pulse") ?: "pulse"
+      val vibrateEnabled = prefs.getBoolean("vibrateEnabled", true)
+
+      val pattern: LongArray? = if (!vibrateEnabled || vibStyle == "off") {
+        null
+      } else when (vibStyle) {
+        "urgent" -> longArrayOf(0, 600, 250, 600, 250, 600)
+        "pulse" -> longArrayOf(0, 400, 200, 400)
+        "gentle" -> longArrayOf(0, 250, 150, 250)
+        else -> longArrayOf(0, 400, 200, 400)
+      }
+
       val openIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.let {
         PendingIntent.getActivity(
           context, 2, it,
@@ -100,35 +139,71 @@ class GlucoseService : Service() {
         )
       }
       val prefix = if (isTest) "[TEST] " else ""
-      val title = if (isLow) "${prefix}⚠ LOW: $display $arrow" else "${prefix}⚠ HIGH: $display $arrow"
+      val title = if (isLow) "${prefix}⚠ LOW GLUCOSE: $display $arrow" else "${prefix}⚠ HIGH GLUCOSE: $display $arrow"
       val body = if (isTest) {
-        "Notification sound & vibration test. Simulated blood sugar: $display."
+        "Sound: ${tone.uppercase()} · Vibration: ${vibStyle.uppercase()} · Simulated: $display."
       } else {
-        "Blood sugar is $state. Tap to open Readings."
+        "Blood sugar is $state ($display $arrow). Immediate action may be required."
       }
-      val notif = NotificationCompat.Builder(context, CHANNEL_ALERT)
+
+      val b = NotificationCompat.Builder(context, channelId)
         .setContentTitle(title)
         .setContentText(body)
         .setSmallIcon(R.mipmap.ic_launcher)
         .setContentIntent(openIntent)
         .setAutoCancel(true)
         .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-        .setCategory(NotificationCompat.CATEGORY_ALARM)
+        .setCategory(if (isLow) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_EVENT)
         .setPriority(NotificationCompat.PRIORITY_HIGH)
-        .setDefaults(NotificationCompat.DEFAULT_ALL)
-        .build()
+
+      if (pattern != null) {
+        b.setVibrate(pattern)
+      } else {
+        b.setVibrate(longArrayOf(0))
+      }
 
       try {
         val mgr = context.getSystemService(NotificationManager::class.java)
-        mgr?.notify(ALERT_NOTIF_ID, notif)
+        mgr?.notify(notifId, b.build())
       } catch (_: Exception) {}
 
-      // Explicitly trigger sound playback so test sounds always play
-      try {
-        val alertUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-        val r = RingtoneManager.getRingtone(context, alertUri)
-        r?.play()
-      } catch (_: Exception) {}
+      // Trigger custom hardware vibration
+      if (pattern != null) {
+        try {
+          val v = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? android.os.VibratorManager)?.defaultVibrator
+          } else {
+            @Suppress("DEPRECATION")
+            context.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+          }
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            v?.vibrate(android.os.VibrationEffect.createWaveform(pattern, -1))
+          } else {
+            @Suppress("DEPRECATION")
+            v?.vibrate(pattern, -1)
+          }
+        } catch (_: Exception) {}
+      }
+
+      // Trigger custom audio playback
+      if (tone != "silent") {
+        try {
+          val soundUri = if (tone == "alarm") {
+            RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+              ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+          } else {
+            RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+          }
+          val r = RingtoneManager.getRingtone(context, soundUri)
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            r?.audioAttributes = AudioAttributes.Builder()
+              .setUsage(if (tone == "alarm") AudioAttributes.USAGE_ALARM else AudioAttributes.USAGE_NOTIFICATION_COMMUNICATION_INSTANT)
+              .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+              .build()
+          }
+          r?.play()
+        } catch (_: Exception) {}
+      }
     }
 
     fun baseUrlForRegion(region: String): String = when (region.uppercase()) {
@@ -217,24 +292,57 @@ class GlucoseService : Service() {
       }
       mgr?.createNotificationChannel(statusCh)
 
-      // Alert channel: audible, for low/high alerts only
-      val alertSoundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-      val audioAttributes = AudioAttributes.Builder()
+      // Low Alert Channel: urgent alarm tone + 3-pulse vibration
+      val lowSoundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+      val highSoundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+
+      val alarmAttributes = AudioAttributes.Builder()
+        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+        .setUsage(AudioAttributes.USAGE_ALARM)
+        .build()
+
+      val notifAttributes = AudioAttributes.Builder()
         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
         .setUsage(AudioAttributes.USAGE_NOTIFICATION_COMMUNICATION_INSTANT)
         .build()
 
-      val alertCh = NotificationChannel(
-        CHANNEL_ALERT, "Readings — urgent alerts",
+      val lowAlertCh = NotificationChannel(
+        CHANNEL_ALERT_LOW, "Readings — Urgent Low Alerts",
         NotificationManager.IMPORTANCE_HIGH
       ).apply {
-        description = "Sound and vibrate when glucose is dangerously low or high."
+        description = "Loud alarm tone & urgent vibration when blood glucose drops below low threshold."
+        lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        enableVibration(true)
+        vibrationPattern = longArrayOf(0, 600, 250, 600, 250, 600)
+        setSound(lowSoundUri, alarmAttributes)
+        setBypassDnd(true)
+      }
+      mgr?.createNotificationChannel(lowAlertCh)
+
+      val highAlertCh = NotificationChannel(
+        CHANNEL_ALERT_HIGH, "Readings — High Alerts",
+        NotificationManager.IMPORTANCE_HIGH
+      ).apply {
+        description = "Notification chime & double-pulse vibration when blood glucose exceeds high threshold."
         lockscreenVisibility = Notification.VISIBILITY_PUBLIC
         enableVibration(true)
         vibrationPattern = longArrayOf(0, 400, 200, 400)
-        setSound(alertSoundUri, audioAttributes)
+        setSound(highSoundUri, notifAttributes)
       }
-      mgr?.createNotificationChannel(alertCh)
+      mgr?.createNotificationChannel(highAlertCh)
+
+      val broadcastCh = NotificationChannel(
+        CHANNEL_BROADCAST, "Readings — Periodic Broadcasts",
+        NotificationManager.IMPORTANCE_HIGH
+      ).apply {
+        description = "Periodic audible reading announcements at configured intervals."
+        lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        enableVibration(true)
+        vibrationPattern = longArrayOf(0, 250, 150, 250)
+        setSound(highSoundUri, notifAttributes)
+      }
+      mgr?.createNotificationChannel(broadcastCh)
     }
   }
 
@@ -262,6 +370,11 @@ class GlucoseService : Service() {
             .putInt("silentNotifIntervalMin", b.getInt("silentNotifIntervalMin", prefs.getInt("silentNotifIntervalMin", 10)).coerceIn(1, 60))
             .putBoolean("audibleBroadcastEnabled", b.getBoolean("audibleBroadcastEnabled", prefs.getBoolean("audibleBroadcastEnabled", false)))
             .putInt("audibleBroadcastIntervalMin", b.getInt("audibleBroadcastIntervalMin", prefs.getInt("audibleBroadcastIntervalMin", 15)).coerceIn(5, 120))
+            .putString("lowAlertTone", b.getString("lowAlertTone") ?: prefs.getString("lowAlertTone", "alarm"))
+            .putString("highAlertTone", b.getString("highAlertTone") ?: prefs.getString("highAlertTone", "notification"))
+            .putString("lowVibration", b.getString("lowVibration") ?: prefs.getString("lowVibration", "urgent"))
+            .putString("highVibration", b.getString("highVibration") ?: prefs.getString("highVibration", "pulse"))
+            .putBoolean("vibrateEnabled", b.getBoolean("vibrateEnabled", prefs.getBoolean("vibrateEnabled", true)))
             .apply()
         }
         return START_STICKY
@@ -279,6 +392,11 @@ class GlucoseService : Service() {
         .putInt("silentNotifIntervalMin", b.getInt("silentNotifIntervalMin", prefs.getInt("silentNotifIntervalMin", 10)).coerceIn(1, 60))
         .putBoolean("audibleBroadcastEnabled", b.getBoolean("audibleBroadcastEnabled", prefs.getBoolean("audibleBroadcastEnabled", false)))
         .putInt("audibleBroadcastIntervalMin", b.getInt("audibleBroadcastIntervalMin", prefs.getInt("audibleBroadcastIntervalMin", 15)).coerceIn(5, 120))
+        .putString("lowAlertTone", b.getString("lowAlertTone") ?: prefs.getString("lowAlertTone", "alarm"))
+        .putString("highAlertTone", b.getString("highAlertTone") ?: prefs.getString("highAlertTone", "notification"))
+        .putString("lowVibration", b.getString("lowVibration") ?: prefs.getString("lowVibration", "urgent"))
+        .putString("highVibration", b.getString("highVibration") ?: prefs.getString("highVibration", "pulse"))
+        .putBoolean("vibrateEnabled", b.getBoolean("vibrateEnabled", prefs.getBoolean("vibrateEnabled", true)))
         .apply()
     }
 

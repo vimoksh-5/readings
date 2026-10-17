@@ -867,6 +867,11 @@ export default function App() {
           next.silentNotifIntervalMin ?? 10,
           next.audibleBroadcastEnabled ?? false,
           next.audibleBroadcastIntervalMin ?? 15,
+          next.lowAlertTone ?? 'alarm',
+          next.highAlertTone ?? 'notification',
+          next.lowVibration ?? 'urgent',
+          next.highVibration ?? 'pulse',
+          next.vibrateEnabled ?? true,
         );
       } catch { }
     }
@@ -1041,6 +1046,11 @@ export default function App() {
         next.silentNotifIntervalMin ?? 10,
         next.audibleBroadcastEnabled ?? false,
         next.audibleBroadcastIntervalMin ?? 15,
+        next.lowAlertTone ?? 'alarm',
+        next.highAlertTone ?? 'notification',
+        next.lowVibration ?? 'urgent',
+        next.highVibration ?? 'pulse',
+        next.vibrateEnabled ?? true,
       );
       setSvcRunning(ok);
       setPassword('');
@@ -1086,6 +1096,11 @@ export default function App() {
           cfg.silentNotifIntervalMin ?? 10,
           cfg.audibleBroadcastEnabled ?? false,
           cfg.audibleBroadcastIntervalMin ?? 15,
+          cfg.lowAlertTone ?? 'alarm',
+          cfg.highAlertTone ?? 'notification',
+          cfg.lowVibration ?? 'urgent',
+          cfg.highVibration ?? 'pulse',
+          cfg.vibrateEnabled ?? true,
         );
         setSvcRunning(ok);
         if (!ok) {
@@ -2275,53 +2290,220 @@ export default function App() {
               )}
             </View>
 
-            {/* Notification Sounds & Alert Testing */}
+            {/* Custom Alert Sounds & Vibration */}
             <View style={styles.card}>
-              <Text style={styles.sectionTitle}>Alert Sounds & Testing</Text>
+              <Text style={styles.sectionTitle}>Alert Sounds & Haptics</Text>
               <Text style={styles.toggleSub}>
-                • Ongoing Status: 100% silent in notification shade (updates every 60s){'\n'}
-                • Urgent Alerts: Plays system notification sound + custom vibration pattern on low/high.
+                Customize separate sound tones and vibration patterns for hypoglycemia (&lt; {settings.lowThresholdMgDl}) and hyperglycemia (&gt; {settings.highThresholdMgDl}).
               </Text>
 
-              <View style={{ flexDirection: 'row', gap: 10, marginTop: 14 }}>
-                <Pressable
-                  style={[styles.testAlertBtn, { backgroundColor: 'rgba(239, 68, 68, 0.16)', borderColor: C.low }]}
-                  onPress={async () => {
-                    try {
-                      await GlucoseBridge.testAlertNotification(true, 52);
-                    } catch (e: any) {
-                      Alert.alert('Test Failed', e?.message || 'Could not trigger test alert');
-                    }
-                  }}>
-                  <Text style={[styles.testAlertBtnTx, { color: C.low }]}>🔔 Test Low Alert (52)</Text>
-                </Pressable>
+              {/* Master Vibration Switch */}
+              <Pressable
+                onPress={() =>
+                  persist({
+                    ...settings,
+                    vibrateEnabled: !(settings.vibrateEnabled ?? true),
+                  })
+                }
+                style={[styles.toggleRow, { marginTop: 12 }]}>
+                <View
+                  style={[
+                    styles.checkbox,
+                    (settings.vibrateEnabled ?? true) && styles.checkboxOn,
+                  ]}>
+                  {(settings.vibrateEnabled ?? true) && (
+                    <Text style={styles.checkmark}>✓</Text>
+                  )}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.toggleLabel}>Vibration Haptics</Text>
+                  <Text style={styles.toggleSub}>
+                    Pulse phone hardware vibrator on alert events
+                  </Text>
+                </View>
+              </Pressable>
 
-                <Pressable
-                  style={[styles.testAlertBtn, { backgroundColor: 'rgba(245, 158, 11, 0.16)', borderColor: C.high }]}
-                  onPress={async () => {
-                    try {
-                      await GlucoseBridge.testAlertNotification(false, 240);
-                    } catch (e: any) {
-                      Alert.alert('Test Failed', e?.message || 'Could not trigger test alert');
-                    }
-                  }}>
-                  <Text style={[styles.testAlertBtnTx, { color: C.high }]}>🔔 Test High Alert (240)</Text>
-                </Pressable>
+              {/* Low Alert Sound & Vibration */}
+              <View style={{ marginTop: 16, paddingTop: 14, borderTopWidth: 1, borderTopColor: C.borderLight }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                  <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: C.low }} />
+                  <Text style={[styles.settLabel, { color: C.low, marginBottom: 0 }]}>
+                    Low Glucose Alerts (&lt; {settings.lowThresholdMgDl} {settings.units === 'mmol' ? 'mmol/L' : 'mg/dL'})
+                  </Text>
+                </View>
+
+                {/* Sound Tone selection */}
+                <Text style={[styles.toggleSub, { marginBottom: 6 }]}>Sound Tone:</Text>
+                <View style={styles.chipRow}>
+                  {[
+                    { key: 'alarm', label: '🚨 Alarm Siren' },
+                    { key: 'notification', label: '🔔 Chime' },
+                    { key: 'silent', label: '🔕 Silent' },
+                  ].map(t => (
+                    <Pressable
+                      key={t.key}
+                      onPress={() => persist({ ...settings, lowAlertTone: t.key as any })}
+                      style={[
+                        styles.chip,
+                        (settings.lowAlertTone ?? 'alarm') === t.key && styles.chipOn,
+                      ]}>
+                      <Text
+                        style={[
+                          styles.chipTx,
+                          (settings.lowAlertTone ?? 'alarm') === t.key && styles.chipTxOn,
+                        ]}>
+                        {t.label}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+
+                {/* Vibration Pattern selection */}
+                <Text style={[styles.toggleSub, { marginTop: 10, marginBottom: 6 }]}>Vibration Pattern:</Text>
+                <View style={styles.chipRow}>
+                  {[
+                    { key: 'urgent', label: '⚡ Urgent (3x)' },
+                    { key: 'pulse', label: '〰 Double' },
+                    { key: 'gentle', label: '• Gentle' },
+                    { key: 'off', label: 'Off' },
+                  ].map(v => (
+                    <Pressable
+                      key={v.key}
+                      onPress={() => persist({ ...settings, lowVibration: v.key as any })}
+                      style={[
+                        styles.chip,
+                        (settings.lowVibration ?? 'urgent') === v.key && styles.chipOn,
+                      ]}>
+                      <Text
+                        style={[
+                          styles.chipTx,
+                          (settings.lowVibration ?? 'urgent') === v.key && styles.chipTxOn,
+                        ]}>
+                        {v.label}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+                  <Pressable
+                    style={[styles.testAlertBtn, { flex: 1, backgroundColor: 'rgba(239, 68, 68, 0.16)', borderColor: C.low }]}
+                    onPress={async () => {
+                      try {
+                        await GlucoseBridge.testAlertNotification(true, 52);
+                      } catch (e: any) {
+                        Alert.alert('Test Failed', e?.message || 'Could not trigger test alert');
+                      }
+                    }}>
+                    <Text style={[styles.testAlertBtnTx, { color: C.low }]}>🔔 Test Low Alert</Text>
+                  </Pressable>
+
+                  <Pressable
+                    style={[styles.baselineBtn, { flex: 1, backgroundColor: C.surfaceEl, borderColor: C.borderLight }]}
+                    onPress={async () => {
+                      try {
+                        await GlucoseBridge.openNotificationSettings('low');
+                      } catch (e: any) {
+                        Alert.alert('Settings', e?.message || 'Could not open settings');
+                      }
+                    }}>
+                    <Text style={[styles.baselineBtnTx, { color: C.textSec, fontSize: 11 }]}>
+                      ⚙ Android Low Settings
+                    </Text>
+                  </Pressable>
+                </View>
               </View>
 
-              <Pressable
-                style={[styles.baselineBtn, { marginTop: 12, backgroundColor: C.surfaceEl, borderColor: C.borderLight }]}
-                onPress={async () => {
-                  try {
-                    await GlucoseBridge.openNotificationSettings();
-                  } catch (e: any) {
-                    Alert.alert('Settings', e?.message || 'Could not open settings');
-                  }
-                }}>
-                <Text style={[styles.baselineBtnTx, { color: C.textSec }]}>
-                  ⚙ Change Notification Sound in Android Settings
-                </Text>
-              </Pressable>
+              {/* High Alert Sound & Vibration */}
+              <View style={{ marginTop: 18, paddingTop: 14, borderTopWidth: 1, borderTopColor: C.borderLight }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                  <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: C.high }} />
+                  <Text style={[styles.settLabel, { color: C.high, marginBottom: 0 }]}>
+                    High Glucose Alerts (&gt; {settings.highThresholdMgDl} {settings.units === 'mmol' ? 'mmol/L' : 'mg/dL'})
+                  </Text>
+                </View>
+
+                {/* Sound Tone selection */}
+                <Text style={[styles.toggleSub, { marginBottom: 6 }]}>Sound Tone:</Text>
+                <View style={styles.chipRow}>
+                  {[
+                    { key: 'notification', label: '🔔 Chime' },
+                    { key: 'alarm', label: '🚨 Alarm Siren' },
+                    { key: 'silent', label: '🔕 Silent' },
+                  ].map(t => (
+                    <Pressable
+                      key={t.key}
+                      onPress={() => persist({ ...settings, highAlertTone: t.key as any })}
+                      style={[
+                        styles.chip,
+                        (settings.highAlertTone ?? 'notification') === t.key && styles.chipOn,
+                      ]}>
+                      <Text
+                        style={[
+                          styles.chipTx,
+                          (settings.highAlertTone ?? 'notification') === t.key && styles.chipTxOn,
+                        ]}>
+                        {t.label}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+
+                {/* Vibration Pattern selection */}
+                <Text style={[styles.toggleSub, { marginTop: 10, marginBottom: 6 }]}>Vibration Pattern:</Text>
+                <View style={styles.chipRow}>
+                  {[
+                    { key: 'pulse', label: '〰 Double' },
+                    { key: 'urgent', label: '⚡ Urgent (3x)' },
+                    { key: 'gentle', label: '• Gentle' },
+                    { key: 'off', label: 'Off' },
+                  ].map(v => (
+                    <Pressable
+                      key={v.key}
+                      onPress={() => persist({ ...settings, highVibration: v.key as any })}
+                      style={[
+                        styles.chip,
+                        (settings.highVibration ?? 'pulse') === v.key && styles.chipOn,
+                      ]}>
+                      <Text
+                        style={[
+                          styles.chipTx,
+                          (settings.highVibration ?? 'pulse') === v.key && styles.chipTxOn,
+                        ]}>
+                        {v.label}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+                  <Pressable
+                    style={[styles.testAlertBtn, { flex: 1, backgroundColor: 'rgba(245, 158, 11, 0.16)', borderColor: C.high }]}
+                    onPress={async () => {
+                      try {
+                        await GlucoseBridge.testAlertNotification(false, 240);
+                      } catch (e: any) {
+                        Alert.alert('Test Failed', e?.message || 'Could not trigger test alert');
+                      }
+                    }}>
+                    <Text style={[styles.testAlertBtnTx, { color: C.high }]}>🔔 Test High Alert</Text>
+                  </Pressable>
+
+                  <Pressable
+                    style={[styles.baselineBtn, { flex: 1, backgroundColor: C.surfaceEl, borderColor: C.borderLight }]}
+                    onPress={async () => {
+                      try {
+                        await GlucoseBridge.openNotificationSettings('high');
+                      } catch (e: any) {
+                        Alert.alert('Settings', e?.message || 'Could not open settings');
+                      }
+                    }}>
+                    <Text style={[styles.baselineBtnTx, { color: C.textSec, fontSize: 11 }]}>
+                      ⚙ Android High Settings
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
             </View>
 
             {/* Historical Readings & Baseline Management */}
