@@ -3,6 +3,7 @@ package com.readingsapp
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.graphics.BitmapFactory
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
@@ -84,7 +85,9 @@ class GlucoseService : Service() {
       val notif = NotificationCompat.Builder(context, CHANNEL_BROADCAST)
         .setContentTitle(title)
         .setContentText(body)
-        .setSmallIcon(R.mipmap.ic_launcher)
+        .setSmallIcon(R.drawable.ic_stat_glucose)
+        .setColor(0xFF00E5FF.toInt())
+        .setLargeIcon(BitmapFactory.decodeResource(context.resources, R.mipmap.ic_launcher))
         .setContentIntent(openIntent)
         .setAutoCancel(true)
         .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -146,10 +149,13 @@ class GlucoseService : Service() {
         "Blood sugar is $state ($display $arrow). Immediate action may be required."
       }
 
+      val alertColor = if (isLow) 0xFFEF4444.toInt() else 0xFFF59E0B.toInt()
       val b = NotificationCompat.Builder(context, channelId)
         .setContentTitle(title)
         .setContentText(body)
-        .setSmallIcon(R.mipmap.ic_launcher)
+        .setSmallIcon(R.drawable.ic_stat_glucose)
+        .setColor(alertColor)
+        .setLargeIcon(BitmapFactory.decodeResource(context.resources, R.mipmap.ic_launcher))
         .setContentIntent(openIntent)
         .setAutoCancel(true)
         .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -739,7 +745,9 @@ class GlucoseService : Service() {
     return NotificationCompat.Builder(this, CHANNEL_STATUS)
       .setContentTitle(title)
       .setContentText(text)
-      .setSmallIcon(R.mipmap.ic_launcher)
+      .setSmallIcon(R.drawable.ic_stat_glucose)
+      .setColor(0xFF00E5FF.toInt())
+      .setLargeIcon(BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher))
       .setContentIntent(openIntent)
       .setOngoing(true)
       .setSilent(true)                 // purely silent
